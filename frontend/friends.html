@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Friends – DSA Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+<script src="config.js"></script>
+</head>
+<body>
+<div class="noise"></div>
+<div class="grid-bg"></div>
+<div id="navContainer"></div>
+<div class="flash-container" id="flashContainer"></div>
+
+<main class="main-content">
+<div class="page-header"><div><h2>Friends</h2><p class="page-sub">People you follow and your followers</p></div></div>
+<div class="friends-grid">
+  <div class="friends-section">
+    <div class="section-head"><h3>Following <span class="count-pill" id="followingCount">0</span></h3></div>
+    <div class="friends-list" id="followingList"></div>
+  </div>
+  <div class="friends-section">
+    <div class="section-head"><h3>Followers <span class="count-pill" id="followersCount">0</span></h3></div>
+    <div class="friends-list" id="followersList"></div>
+  </div>
+</div>
+</main>
+
+<script src="assets/js/main.js"></script>
+<script src="assets/js/app.js"></script>
+<script>
+(async () => {
+  const me = await requireAuth({ verified: true });
+  if (!me) return;
+  const { following, followers } = await apiGet("/friends");
+
+  document.getElementById("followingCount").textContent = (following || []).length;
+  document.getElementById("followersCount").textContent = (followers || []).length;
+
+  document.getElementById("followingList").innerHTML = (following && following.length) ? following.map(u => `
+    <div class="friend-card">
+      <div class="friend-avatar">${(u.username[0] || "?").toUpperCase()}</div>
+      <div class="friend-info">
+        <a href="profile.html?username=${encodeURIComponent(u.username)}" class="friend-name">${u.username}</a>
+        <div class="friend-handles">
+          ${u.cf_handle ? `<span class="handle-mini cf-mini">CF: ${u.cf_handle}</span>` : ""}
+          ${u.lc_handle ? `<span class="handle-mini lc-mini">LC: ${u.lc_handle}</span>` : ""}
+        </div>
+        <p class="friend-stat">🏆 ${u.prob_count} solved</p>
+      </div>
+      <a href="profile.html?username=${encodeURIComponent(u.username)}" class="btn btn-outline btn-sm">View →</a>
+    </div>`).join("") : `<div class="empty-state" style="padding:2rem">Not following anyone. Check the <a href="leaderboard.html">Leaderboard</a>!</div>`;
+
+  document.getElementById("followersList").innerHTML = (followers && followers.length) ? followers.map(u => `
+    <div class="friend-card">
+      <div class="friend-avatar">${(u.username[0] || "?").toUpperCase()}</div>
+      <div class="friend-info">
+        <a href="profile.html?username=${encodeURIComponent(u.username)}" class="friend-name">${u.username}</a>
+        <p class="friend-stat">🏆 ${u.prob_count} solved</p>
+      </div>
+      <a href="profile.html?username=${encodeURIComponent(u.username)}" class="btn btn-outline btn-sm">View →</a>
+    </div>`).join("") : `<div class="empty-state" style="padding:2rem">No followers yet.</div>`;
+})();
+</script>
+</body>
+</html>

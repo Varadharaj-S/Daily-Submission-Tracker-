@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Student Contest – DSA Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+<script src="config.js"></script>
+<style>
+  .contest-wrap{display:flex;flex-direction:column;gap:1rem}
+  .contest-hero{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:flex-start}
+  .contest-hero h2{margin:0;font-size:1.5rem}
+  .contest-hero p{margin:.35rem 0 0;color:var(--muted)}
+  .grid-4{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:1rem}
+  .mini-card{background:var(--bg2);border:1px solid var(--border);border-radius:18px;padding:1rem;box-shadow:var(--shadow)}
+  .mini-card .k{font-size:.75rem;text-transform:uppercase;color:var(--muted);letter-spacing:.08em}
+  .mini-card .v{font-size:1.6rem;font-weight:800;margin-top:.35rem}
+  .section-card{background:var(--bg2);border:1px solid var(--border);border-radius:18px;padding:1rem;box-shadow:var(--shadow)}
+  .section-card h3{margin:0 0 .9rem;font-size:1rem}
+  .table-wrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:.55rem .7rem;border-bottom:1px solid var(--border2);text-align:left;vertical-align:top}
+  th{font-size:.78rem;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+  td{font-size:.88rem}
+  .chip{display:inline-flex;align-items:center;padding:.18rem .55rem;border-radius:999px;background:var(--bg3);border:1px solid var(--border2);font-size:.78rem}
+  .chip.status-upcoming{background:rgba(251,191,36,.12);color:#fbbf24}
+  .chip.status-running{background:rgba(16,185,129,.12);color:#34d399}
+  .chip.status-completed{background:rgba(148,163,184,.12);color:#94a3b8}
+  .row-actions{display:flex;gap:.4rem;flex-wrap:wrap}
+  .empty-state{text-align:center;padding:2.5rem 1rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="noise"></div>
+<div class="grid-bg"></div>
+<div id="navContainer"></div>
+<div class="flash-container" id="flashContainer"></div>
+
+<main class="main-content" id="app">Loading…</main>
+
+<script src="assets/js/main.js"></script>
+<script src="assets/js/app.js"></script>
+<script>
+async function refreshContestSheet() {
+  const d = await apiPostForm("/contest/refresh_sheet", {});
+  showToast(d.message || (d.success ? "Refreshed." : "Failed."), d.success ? "success" : "error");
+}
+async function deleteContest(cid, name) {
+  if (!confirm(`Delete ${name}? This also removes any saved results.`)) return;
+  const d = await apiPostForm(`/contest/delete/${cid}`, {});
+  showToast(d.message || (d.success ? "Deleted." : "Failed."), d.success ? "success" : "error");
+  if (d.success) location.reload();
+}
+
+(async () => {
+  const me = await requireAuth({ verified: true });
+  if (!me) return;
+
+  const { contests, counts, total_contests } = await apiGet("/student_contest");
+
+  document.getElementById("app").innerHTML = `
+  <div class="contest-wrap">
+    <div class="contest-hero">
+      <div><h2>⭐ Student Contest</h2><p>Track contest participation across Codeforces, LeetCode, and AtCoder.</p></div>
+      <div class="row-actions">
+        <a href="contest_create.html" class="btn btn-primary">+ Create Contest</a>
+        <a href="contest_history.html" class="btn btn-outline">📜 History</a>
+        <button class="btn btn-outline" onclick="refreshContestSheet()">🔄 Refresh Sheet</button>
+      </div>
+    </div>
+
+    <div class="grid-4">
+      <div class="mini-card"><div class="k">Total Contests</div><div class="v">${total_contests}</div></div>
+      <div class="mini-card"><div class="k">Upcoming</div><div class="v">${counts["Upcoming"] || 0}</div></div>
+      <div class="mini-card"><div class="k">Running</div><div class="v">${counts["Running"] || 0}</div></div>
+      <div class="mini-card"><div class="k">Completed</div><div class="v">${counts["Completed"] || 0}</div></div>
+    </div>
+
+    <div class="section-card">
+      <h3>All Contests</h3>
+      ${(contests && contests.length) ? `
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Contest</th><th>Code</th><th>Platform</th><th>Date</th><th>Start</th><th>End</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            ${contests.map(c => `
+              <tr>
+                <td>${c.contest_name}</td>
+                <td><code>${c.contest_code}</code></td>
+                <td>${c.platform}</td>
+                <td>${c.contest_date}</td>
+                <td>${c.start_time}</td>
+                <td>${c.end_time}</td>
+                <td><span class="chip status-${(c.status || "").toLowerCase()}">${c.status}</span></td>
+                <td><button class="btn btn-outline btn-sm" onclick="deleteContest(${c.id}, '${(c.contest_name || "").replace(/'/g, "\\'")}')">🗑 Delete</button></td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>` : `<div class="empty-state">No contests yet. <a href="contest_create.html">Create your first contest</a>.</div>`}
+    </div>
+  </div>`;
+})();
+</script>
+</body>
+</html>

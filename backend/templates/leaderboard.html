@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Leaderboard – DSA Tracker{% endblock %}
+{% block content %}
+<div class="page-header"><div><h2>🏅 Leaderboard</h2><p class="page-sub">Ranked by total problems solved</p></div></div>
+<div class="table-card">
+  <div class="table-wrap">
+    <table class="leaderboard-table">
+      <thead><tr><th>Rank</th><th>User</th><th>Total</th><th>CF</th><th>LC</th><th>AC</th><th>Last Sync</th><th></th></tr></thead>
+      <tbody>
+        {% for u in users %}
+        <tr class="{{ 'rank-gold' if loop.index==1 else 'rank-silver' if loop.index==2 else 'rank-bronze' if loop.index==3 else '' }}">
+          <td class="rank-num">{% if loop.index<=3 %}{{ ['🥇','🥈','🥉'][loop.index-1] }}{% else %}<span class="mono">#{{ loop.index }}</span>{% endif %}</td>
+          <td><div class="lb-user"><div class="lb-avatar">{{ u.username[0]|upper }}</div>
+            <span class="lb-name {% if u.username==current_user.username %}lb-you{% endif %}">{{ u.username }}{% if u.username==current_user.username %}<span class="you-tag">you</span>{% endif %}</span></div></td>
+          <td class="lb-total">{{ u.total }}</td>
+          <td class="lb-plat cf-text">{{ u.cf or 0 }}</td>
+          <td class="lb-plat lc-text">{{ u.lc or 0 }}</td>
+          <td class="lb-plat ac-text">{{ u.ac or 0 }}</td>
+          <td class="mono muted small">{{ u.last_sync or '—' }}</td>
+          <td>{% if u.is_public %}<a href="{{ url_for('public_profile', username=u.username) }}" class="btn btn-outline btn-sm">View</a>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

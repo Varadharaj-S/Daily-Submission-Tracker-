@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Settings – DSA Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+<script src="config.js"></script>
+</head>
+<body>
+<div class="noise"></div>
+<div class="grid-bg"></div>
+<div id="navContainer"></div>
+<div class="flash-container" id="flashContainer"></div>
+
+<main class="main-content">
+<div class="page-header">
+  <div><h2>Settings</h2><p class="page-sub">Configure handles, platforms, and security</p></div>
+</div>
+
+<div class="settings-layout">
+  <div class="settings-main">
+
+    <!-- Platform Handles -->
+    <form class="settings-card" id="profileForm">
+      <div class="settings-section">
+        <h3>🎮 Platform Handles</h3>
+        <p class="section-desc">Enter your usernames. Only enabled platforms (below) will be fetched during sync.</p>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label"><span class="platform-badge platform-cf">CF</span> Codeforces Handle</label>
+            <input class="form-input" type="text" name="cf_handle" id="cf_handle" placeholder="e.g. tourist" maxlength="64">
+          </div>
+          <div class="form-group">
+            <label class="form-label"><span class="platform-badge platform-lc">LC</span> LeetCode Username</label>
+            <input class="form-input" type="text" name="lc_handle" id="lc_handle" placeholder="e.g. neal_wu" maxlength="64">
+          </div>
+          <div class="form-group">
+            <label class="form-label"><span class="platform-badge platform-ac">AC</span> AtCoder Handle</label>
+            <input class="form-input" type="text" name="ac_handle" id="ac_handle" placeholder="e.g. tourist" maxlength="64">
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3>📌 Enabled Platforms</h3>
+        <p class="section-desc">Only checked platforms will sync. Uncheck to skip.</p>
+        <div class="platform-checkboxes" id="platformChecks">
+          <label class="plat-checkbox-label">
+            <input type="checkbox" name="platforms" value="Codeforces">
+            <span class="plat-checkbox-box platform-badge platform-cf">Codeforces</span>
+          </label>
+          <label class="plat-checkbox-label">
+            <input type="checkbox" name="platforms" value="LeetCode">
+            <span class="plat-checkbox-box platform-badge platform-lc">LeetCode</span>
+          </label>
+          <label class="plat-checkbox-label">
+            <input type="checkbox" name="platforms" value="AtCoder">
+            <span class="plat-checkbox-box platform-badge platform-ac">AtCoder</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3>📊 Google Sheet</h3>
+        <p class="section-desc">Your Sheet was auto-created at signup. You can override the ID here.</p>
+        <div class="form-group">
+          <label class="form-label">Sheet ID</label>
+          <input class="form-input mono" type="text" name="sheet_id" id="sheet_id" maxlength="128"
+                 placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms">
+          <span class="field-hint">From URL: docs.google.com/spreadsheets/d/<strong>[ID]</strong>/edit</span>
+        </div>
+        <a href="#" target="_blank" id="openSheetLink" class="btn btn-outline btn-sm" style="margin-top:.5rem;display:none">Open My Sheet ↗</a>
+      </div>
+
+      <div class="settings-section">
+        <h3>👤 Profile</h3>
+        <div class="form-group">
+          <label class="form-label">Bio</label>
+          <textarea class="form-input" name="bio" id="bio" rows="3" maxlength="300"
+                    placeholder="Tell people about yourself..."></textarea>
+        </div>
+        <div class="form-group" style="margin-top:.75rem">
+          <label class="toggle-label">
+            <input type="checkbox" name="is_public" id="is_public">
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            Public profile (visible to others)
+          </label>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary">Save Settings</button>
+    </form>
+
+    <!-- Password -->
+    <form class="settings-card" id="passwordForm">
+      <div class="settings-section">
+        <h3>🔒 Change Password</h3>
+        <div class="form-group">
+          <label class="form-label">Current Password</label>
+          <input class="form-input" type="password" name="old_password" required>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label">New Password</label>
+            <input class="form-input" type="password" name="new_password" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Confirm New</label>
+            <input class="form-input" type="password" name="confirm_password" required>
+          </div>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-outline">Change Password</button>
+    </form>
+  </div>
+
+  <div class="settings-side">
+    <div class="info-card">
+      <h3>👤 Account</h3>
+      <div class="info-row"><span>Username</span><strong class="mono" id="infoUsername">—</strong></div>
+      <div class="info-row"><span>Email</span><strong class="mono small" id="infoEmail">—</strong></div>
+      <div class="info-row"><span>Role</span><strong id="infoRole">—</strong></div>
+      <div class="info-row"><span>Last Login</span><strong class="mono small" id="infoLastLogin">—</strong></div>
+      <div class="info-row"><span>Last Sync</span><strong class="mono small" id="infoLastSync">—</strong></div>
+      <a href="login_history.html" class="info-link">View login history →</a>
+    </div>
+    <div class="info-card">
+      <h3>🔗 Your Profile Link</h3>
+      <div class="profile-link-box">
+        <span class="mono small" id="profileLink">—</span>
+        <button class="btn btn-outline btn-sm"
+                onclick="navigator.clipboard.writeText(document.getElementById('profileLink').textContent);showToast('Copied!','success')">Copy</button>
+      </div>
+      <p class="section-desc" style="margin-top:0.5rem">Share this link with others to show your public profile.</p>
+    </div>
+    <div class="info-card">
+      <h3>🔗 LeetCode Connection</h3>
+      <div id="lcConnStatus"></div>
+      <div style="background:#0f172a;border:1px solid #1e3a5f;border-radius:10px;padding:14px 16px;margin:12px 0;font-size:.85rem;line-height:1.9">
+        <strong style="color:#4d9de0">How to connect using the Chrome Extension:</strong><br>
+        1️⃣ &nbsp;Install the <strong>DSA Tracker</strong> extension (see <code>extension/</code> folder)<br>
+        2️⃣ &nbsp;Log in to <a href="https://leetcode.com" target="_blank" style="color:#4d9de0">leetcode.com</a> in the same browser<br>
+        3️⃣ &nbsp;Click the extension icon in your toolbar<br>
+        4️⃣ &nbsp;Enter your site URL and click <strong>Connect LeetCode</strong><br>
+        5️⃣ &nbsp;Done — automatic daily sync starts immediately ✅
+      </div>
+      <p class="small muted" style="margin-top:8px">
+        No passwords stored. No Selenium. The extension reads your browser cookies directly and sends them securely to this site.
+      </p>
+    </div>
+  </div>
+</div>
+</main>
+
+<script src="assets/js/main.js"></script>
+<script src="assets/js/app.js"></script>
+<script>
+let CURRENT_USER = null;
+
+(async () => {
+  const me = await requireAuth({ verified: true });
+  if (!me) return;
+
+  const { user } = await apiGet("/settings");
+  CURRENT_USER = user;
+
+  document.getElementById("cf_handle").value = user.cf_handle || "";
+  document.getElementById("lc_handle").value = user.lc_handle || "";
+  document.getElementById("ac_handle").value = user.ac_handle || "";
+  document.getElementById("sheet_id").value = user.sheet_id || "";
+  document.getElementById("bio").value = user.bio || "";
+  document.getElementById("is_public").checked = !!user.is_public;
+
+  let enabledList = ["Codeforces", "LeetCode", "AtCoder"];
+  try { enabledList = JSON.parse(user.enabled_platforms || "[]"); } catch (e) {}
+  document.querySelectorAll('#platformChecks input[name="platforms"]').forEach(cb => {
+    cb.checked = enabledList.includes(cb.value);
+  });
+
+  if (user.sheet_id) {
+    const link = document.getElementById("openSheetLink");
+    link.href = `https://docs.google.com/spreadsheets/d/${user.sheet_id}`;
+    link.style.display = "inline-block";
+  }
+
+  document.getElementById("infoUsername").textContent = user.username;
+  document.getElementById("infoEmail").textContent = user.email || "—";
+  document.getElementById("infoRole").textContent = user.is_admin ? "Admin" : "User";
+  document.getElementById("infoLastLogin").textContent = user.last_login || "—";
+  document.getElementById("infoLastSync").textContent = user.last_sync || "—";
+  document.getElementById("profileLink").textContent = `${BASE_API_URL}/user/${user.username}`;
+
+  const connStatus = document.getElementById("lcConnStatus");
+  if (user.lc_session_cookie && !user.cookie_expiry) {
+    connStatus.innerHTML = `<div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.8rem">
+      <span style="font-size:1.4rem">✅</span><span style="font-weight:700;color:#22c55e">LeetCode Connected</span></div>
+      <p class="small muted">Cookie is stored and sync runs automatically every day.</p>`;
+  } else if (user.cookie_expiry) {
+    connStatus.innerHTML = `<div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.8rem">
+      <span style="font-size:1.4rem">⚠️</span><span style="font-weight:700;color:#f59e0b">Session Expired — Reconnect Required</span></div>`;
+  } else {
+    connStatus.innerHTML = `<div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.8rem">
+      <span style="font-size:1.4rem">🔴</span><span style="font-weight:700;color:#94a3b8">Not Connected</span></div>`;
+  }
+})();
+
+document.getElementById("profileForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const payload = {
+    action: "profile",
+    cf_handle: fd.get("cf_handle") || "",
+    lc_handle: fd.get("lc_handle") || "",
+    ac_handle: fd.get("ac_handle") || "",
+    sheet_id: fd.get("sheet_id") || "",
+    bio: fd.get("bio") || "",
+    is_public: fd.get("is_public") ? "on" : "",
+    platforms: fd.getAll("platforms"),
+    // preserved LeetCode auth fields untouched (this form doesn't edit them)
+    lc_password: "",
+    lc_session_cookie: CURRENT_USER ? CURRENT_USER.lc_session_cookie || "" : "",
+    lc_csrf_token: CURRENT_USER ? CURRENT_USER.lc_csrf_token || "" : ""
+  };
+  const data = await apiPostJSON("/settings", payload);
+  showToast(data.message || (data.success ? "Saved!" : "Save failed."), data.success ? "success" : "error");
+});
+
+document.getElementById("passwordForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const data = await apiPostJSON("/settings", {
+    action: "password",
+    old_password: fd.get("old_password"),
+    new_password: fd.get("new_password"),
+    confirm_password: fd.get("confirm_password")
+  });
+  showToast(data.message || (data.success ? "Password changed!" : "Change failed."), data.success ? "success" : "error");
+  if (data.success) e.target.reset();
+});
+</script>
+</body>
+</html>

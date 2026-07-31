@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Leaderboard – DSA Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+<script src="config.js"></script>
+</head>
+<body>
+<div class="noise"></div>
+<div class="grid-bg"></div>
+<div id="navContainer"></div>
+<div class="flash-container" id="flashContainer"></div>
+
+<main class="main-content">
+<div class="page-header"><div><h2>🏅 Leaderboard</h2><p class="page-sub">Ranked by total problems solved</p></div></div>
+<div class="table-card">
+  <div class="table-wrap">
+    <table class="leaderboard-table">
+      <thead><tr><th>Rank</th><th>User</th><th>Total</th><th>CF</th><th>LC</th><th>AC</th><th>Last Sync</th><th></th></tr></thead>
+      <tbody id="lbBody"></tbody>
+    </table>
+  </div>
+</div>
+</main>
+
+<script src="assets/js/main.js"></script>
+<script src="assets/js/app.js"></script>
+<script>
+(async () => {
+  const me = await requireAuth({ verified: true });
+  if (!me) return;
+  const { users } = await apiGet("/leaderboard");
+  const medals = ["🥇", "🥈", "🥉"];
+  const rankClass = i => i === 0 ? "rank-gold" : i === 1 ? "rank-silver" : i === 2 ? "rank-bronze" : "";
+  document.getElementById("lbBody").innerHTML = (users || []).map((u, i) => `
+    <tr class="${rankClass(i)}">
+      <td class="rank-num">${i < 3 ? medals[i] : `<span class="mono">#${i + 1}</span>`}</td>
+      <td><div class="lb-user"><div class="lb-avatar">${(u.username[0] || "?").toUpperCase()}</div>
+        <span class="lb-name ${u.username === me.username ? "lb-you" : ""}">${u.username}${u.username === me.username ? '<span class="you-tag">you</span>' : ""}</span></div></td>
+      <td class="lb-total">${u.total}</td>
+      <td class="lb-plat cf-text">${u.cf || 0}</td>
+      <td class="lb-plat lc-text">${u.lc || 0}</td>
+      <td class="lb-plat ac-text">${u.ac || 0}</td>
+      <td class="mono muted small">${u.last_sync || "—"}</td>
+      <td>${u.is_public ? `<a href="profile.html?username=${encodeURIComponent(u.username)}" class="btn btn-outline btn-sm">View</a>` : ""}</td>
+    </tr>`).join("");
+})();
+</script>
+</body>
+</html>

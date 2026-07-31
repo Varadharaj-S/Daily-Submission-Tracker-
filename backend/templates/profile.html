@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}{{ profile_user.username }} – DSA Tracker{% endblock %}
+{% block head %}<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>{% endblock %}
+{% block content %}
+<div class="profile-wrap">
+  <div class="profile-header-card">
+    <div class="profile-avatar">{{ profile_user.username[0]|upper }}</div>
+    <div class="profile-info">
+      <h2>{{ profile_user.username }}</h2>
+      {% if profile_user.bio %}<p class="profile-bio">{{ profile_user.bio }}</p>{% endif %}
+      <div class="profile-handles">
+        {% if profile_user.cf_handle %}<a href="https://codeforces.com/profile/{{ profile_user.cf_handle }}" target="_blank" class="handle-chip cf-chip">CF: {{ profile_user.cf_handle }}</a>{% endif %}
+        {% if profile_user.lc_handle %}<a href="https://leetcode.com/{{ profile_user.lc_handle }}" target="_blank" class="handle-chip lc-chip">LC: {{ profile_user.lc_handle }}</a>{% endif %}
+        {% if profile_user.ac_handle %}<a href="https://atcoder.jp/users/{{ profile_user.ac_handle }}" target="_blank" class="handle-chip ac-chip">AC: {{ profile_user.ac_handle }}</a>{% endif %}
+      </div>
+      <div class="profile-meta">
+        <span>{{ follower_count }} followers</span><span>·</span>
+        <span>{{ following_count }} following</span>
+        {% if profile_user.last_sync %}<span>· Synced <span class="mono">{{ profile_user.last_sync }}</span></span>{% endif %}
+      </div>
+    </div>
+    <div class="profile-actions">
+      {% if viewer_is_self %}<a href="{{ url_for('settings') }}" class="btn btn-outline">Edit Profile</a>
+      {% elif current_user.is_authenticated %}
+      <button id="followBtn" class="btn {% if is_following %}btn-following{% else %}btn-primary{% endif %}"
+              onclick="toggleFollow({{ profile_user.id }})">
+        {% if is_following %}✓ Following{% else %}+ Follow{% endif %}
+      </button>{% endif %}
+    </div>
+  </div>
+
+  <div class="stats-grid">
+    {% for icon,val,lbl,cls in [('🏆',data.total,'Total','total'),('🔵',data.cf,'Codeforces','cf'),('🟡',data.lc,'LeetCode','lc'),('🟢',data.ac,'AtCoder','ac'),('🔥',data.streak,'Streak','streak')] %}
+    <div class="stat-card stat-{{ cls }}"><div class="stat-icon">{{ icon }}</div>
+      <div class="stat-body"><div class="stat-num">{{ val }}</div><div class="stat-label">{{ lbl }}</div></div></div>
+    {% endfor %}
+  </div>
+
+  {% if data.chart_labels %}
+  <div class="chart-card">
+    <div class="card-header"><h3>Activity</h3></div>
+    <div class="chart-wrap"><canvas id="pChart"></canvas></div>
+  </div>
+  {% endif %}
+
+  <div class="table-card">
+    <div class="card-header"><h3>Recent Problems</h3></div>
+    {% if subs %}
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>Platform</th><th>Problem</th><th>Date</th></tr></thead>
+      <tbody>{% for s in subs %}
+        <tr><td class="row-num mono">{{ loop.index }}</td>
+          <td><span class="platform-badge platform-{{ s['platform']|lower|replace('codeforces','cf')|replace('leetcode','lc')|replace('atcoder','ac') }}">{{ s['platform'] }}</span></td>
+          <td class="problem-name">{% if s['problem_url'] %}<a href="{{ s['problem_url'] }}" target="_blank" class="problem-link">{{ s['problem_name'] }} ↗</a>{% else %}{{ s['problem_name'] }}{% endif %}</td>
+          <td class="mono">{{ s['solved_date'] }}</td></tr>
+      {% endfor %}</tbody>
+    </table></div>
+    {% else %}<div class="empty-state">No submissions yet.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const l={{ data.chart_labels|tojson }}, v={{ data.chart_data|tojson }};
+if(l.length&&document.getElementById('pChart')){
+  new Chart(document.getElementById('pChart'),{type:'bar',data:{labels:l,datasets:[{label:'Solved',data:v,backgroundColor:'rgba(251,191,36,.65)',borderColor:'#fbbf24',borderWidth:1,borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#555',font:{size:9}},grid:{color:'rgba(255,255,255,.04)'}},y:{ticks:{color:'#555',font:{size:9}},grid:{color:'rgba(255,255,255,.04)'},beginAtZero:true}}}});
+}
+async function toggleFollow(uid){
+  const btn=document.getElementById('followBtn');
+  const r=await fetch(`/follow/${uid}`,{method:'POST'});
+  const d=await r.json();
+  if(d.success){btn.textContent=d.action==='followed'?'✓ Following':'+ Follow';btn.className='btn '+(d.action==='followed'?'btn-following':'btn-primary');}
+}
+</script>
+{% endblock %}

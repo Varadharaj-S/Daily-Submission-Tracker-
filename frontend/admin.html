@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Panel – DSA Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+<script src="config.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+.admin-wrap{display:flex;flex-direction:column;gap:1.5rem}
+.admin-topbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem}
+.admin-topbar h2{font-size:1.4rem;margin:0}
+.admin-topbar-actions{display:flex;gap:.5rem;flex-wrap:wrap}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1rem}
+.stat-card{background:var(--card-bg);border:1px solid var(--border);border-radius:10px;padding:1rem 1.2rem;display:flex;align-items:center;gap:.9rem}
+.stat-icon{font-size:1.6rem}
+.stat-num{font-size:1.6rem;font-weight:700;line-height:1}
+.stat-label{font-size:.72rem;color:var(--muted);margin-top:.2rem;text-transform:uppercase;letter-spacing:.05em}
+.charts-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+@media(max-width:700px){.charts-row{grid-template-columns:1fr}}
+.chart-card{background:var(--card-bg);border:1px solid var(--border);border-radius:10px;padding:1rem}
+.chart-card h3{font-size:.85rem;margin:0 0 .75rem;color:var(--muted)}
+.chart-wrap{height:160px}
+.search-bar{display:flex;align-items:center;gap:.6rem;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:.4rem .75rem;margin-bottom:.75rem}
+.search-bar input{background:transparent;border:none;outline:none;color:var(--text);flex:1;font-size:.88rem}
+.search-bar .search-icon{color:var(--muted)}
+.table-card{background:var(--card-bg);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.table-card-header{display:flex;align-items:center;justify-content:space-between;padding:.85rem 1.1rem;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:.5rem}
+.table-card-header h3{margin:0;font-size:.9rem}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.82rem}
+thead th{padding:.55rem .8rem;text-align:left;background:rgba(255,255,255,.03);color:var(--muted);font-weight:600;border-bottom:1px solid var(--border);white-space:nowrap}
+tbody tr{border-bottom:1px solid rgba(255,255,255,.04);transition:background .15s}
+tbody tr:last-child{border-bottom:none}
+tbody tr:hover{background:rgba(255,255,255,.03)}
+tbody td{padding:.55rem .8rem;vertical-align:middle}
+.status-badge{display:inline-block;padding:.18rem .55rem;border-radius:20px;font-size:.7rem;font-weight:600;text-transform:uppercase}
+.status-active{background:rgba(52,211,153,.15);color:#34d399}
+.status-pending{background:rgba(251,191,36,.15);color:#fbbf24}
+.status-banned{background:rgba(239,68,68,.15);color:#ef4444}
+.role-badge{display:inline-block;padding:.15rem .5rem;border-radius:4px;font-size:.68rem;font-weight:700;text-transform:uppercase}
+.role-admin{background:rgba(167,139,250,.2);color:#a78bfa}
+.role-user{background:rgba(148,163,184,.1);color:#94a3b8}
+.lc-badge{background:rgba(251,191,36,.15);color:#fbbf24;font-size:.7rem;padding:.1rem .4rem;border-radius:4px}
+.you-badge{font-size:.68rem;color:var(--muted);padding:.2rem .5rem;background:rgba(255,255,255,.05);border-radius:4px}
+.pending-badge{background:#fbbf24;color:#000;border-radius:20px;font-size:.7rem;padding:.15rem .5rem;margin-left:.4rem;font-weight:700}
+.actions-cell{display:flex;align-items:center;gap:.35rem;flex-wrap:wrap}
+.btn-sm{padding:.25rem .55rem;border-radius:5px;border:none;cursor:pointer;font-size:.72rem;font-weight:600;transition:opacity .15s,transform .1s;display:inline-flex;align-items:center;gap:.25rem}
+.btn-sm:hover{opacity:.85;transform:translateY(-1px)}
+.btn-approve{background:rgba(52,211,153,.2);color:#34d399}
+.btn-delete{background:rgba(239,68,68,.2);color:#ef4444}
+.btn-promote{background:rgba(167,139,250,.2);color:#a78bfa}
+.btn-sync{background:rgba(77,157,224,.2);color:#4d9de0}
+.btn-reset{background:rgba(251,191,36,.15);color:#fbbf24}
+.btn-restore{background:rgba(52,211,153,.15);color:#34d399}
+.btn-spin{animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.pending-section{border-color:#fbbf24 !important}
+.pending-row td{background:rgba(251,191,36,.04)}
+.log-action{font-size:.72rem;font-family:monospace;background:rgba(255,255,255,.06);padding:.1rem .4rem;border-radius:4px}
+.backup-section{padding:1rem 1.1rem}
+.backup-list{display:flex;flex-direction:column;gap:.4rem;margin-bottom:.75rem;max-height:180px;overflow-y:auto}
+.backup-item{display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,.04);padding:.4rem .7rem;border-radius:6px}
+.restore-form{display:flex;gap:.5rem;flex-wrap:wrap}
+.restore-form input{flex:1;min-width:180px}
+.user-detail-row td{background:rgba(255,255,255,.02) !important;padding:.75rem 1rem}
+.user-detail-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.6rem}
+.detail-item{font-size:.78rem}
+.detail-item .dk{color:var(--muted);margin-bottom:.15rem;font-size:.68rem;text-transform:uppercase}
+.detail-item .dv{font-family:monospace;word-break:break-all}
+.mono{font-family:monospace} .small{font-size:.78rem} .muted{color:var(--muted)}
+.num-highlight{font-weight:700;color:var(--accent,#4d9de0)}
+.row-admin{background:rgba(167,139,250,.04) !important}
+.empty-state{color:var(--muted);text-align:center;padding:2rem}
+#toast{position:fixed;bottom:1.5rem;right:1.5rem;z-index:999;background:#1e293b;border:1px solid var(--border);color:#e2e8f0;padding:.6rem 1rem;border-radius:8px;font-size:.82rem;opacity:0;transform:translateY(8px);transition:opacity .3s,transform .3s;pointer-events:none}
+#toast.show{opacity:1;transform:translateY(0)}
+</style>
+</head>
+<body>
+<div class="noise"></div>
+<div class="grid-bg"></div>
+<div id="navContainer"></div>
+<div class="flash-container" id="flashContainer"></div>
+
+<main class="main-content"><div class="admin-wrap" id="app">Loading…</div></main>
+<div id="toast"></div>
+
+<script src="assets/js/main.js"></script>
+<script src="assets/js/app.js"></script>
+<script>
+let ME_ID = null;
+
+function adminToast(msg, ok = true) {
+  const t = document.getElementById("toast");
+  t.textContent = (ok ? "✅ " : "❌ ") + msg;
+  t.style.borderColor = ok ? "#34d399" : "#ef4444";
+  t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 3000);
+}
+
+function filterUsers() {
+  const q = document.getElementById("userSearch").value.toLowerCase();
+  document.querySelectorAll("#usersTable tbody tr").forEach(tr => {
+    if (tr.id && tr.id.startsWith("detail-")) { tr.style.display = "none"; return; }
+    const match = !q || (tr.dataset.username || "").includes(q) || (tr.dataset.cf || "").includes(q) || (tr.dataset.lc || "").includes(q);
+    tr.style.display = match ? "" : "none";
+  });
+}
+
+function toggleDetail(uid) {
+  const row = document.getElementById("detail-" + uid);
+  if (row) row.style.display = row.style.display === "none" ? "" : "none";
+}
+
+async function syncUser(uid, btn) {
+  const icon = btn.textContent;
+  btn.classList.add("btn-spin"); btn.disabled = true;
+  try {
+    const d = await apiPostJSON(`/admin/sync_user/${uid}`, {});
+    adminToast(d.message || "Sync started");
+  } catch (e) { adminToast("Request failed", false); }
+  btn.classList.remove("btn-spin"); btn.disabled = false; btn.textContent = icon;
+}
+
+async function restoreSheet(uid, username, btn) {
+  if (!confirm(`Rebuild ${username}'s Google Sheet tab from the database? Anything typed directly into the Sheet will be replaced.`)) return;
+  const icon = btn.textContent;
+  btn.classList.add("btn-spin"); btn.disabled = true;
+  try {
+    const d = await apiPostJSON(`/admin/restore_sheet/${uid}`, {});
+    adminToast(d.message || (d.ok ? "Sheet restored" : "Restore failed"), d.ok);
+  } catch (e) { adminToast("Request failed", false); }
+  btn.classList.remove("btn-spin"); btn.disabled = false; btn.textContent = icon;
+}
+
+async function resetLC(uid, btn) {
+  if (!confirm("Reset LC import flag for this user?")) return;
+  try {
+    await apiPostJSON(`/admin/reset_lc/${uid}`, {});
+    adminToast("LC import flag reset");
+    btn.style.display = "none";
+  } catch (e) { adminToast("Failed", false); }
+}
+
+async function promoteUser(uid) {
+  const d = await apiPostForm(`/admin/promote/${uid}`, {});
+  adminToast(d.message || (d.success ? "Updated" : "Failed"), d.success);
+  if (d.success) location.reload();
+}
+async function deleteUser(uid, username) {
+  if (!confirm(`Delete ${username}? This cannot be undone.`)) return;
+  const d = await apiPostForm(`/admin/delete/${uid}`, {});
+  adminToast(d.message || (d.success ? "Deleted" : "Failed"), d.success);
+  if (d.success) location.reload();
+}
+async function verifyUser(uid, action) {
+  const d = await apiPostForm(`/admin/verify/${uid}`, { action });
+  adminToast(d.message || (d.success ? "Done" : "Failed"), d.success);
+  if (d.success) location.reload();
+}
+async function syncAll() {
+  if (!confirm("Sync all active users in background?")) return;
+  const d = await apiPostForm("/admin/sync_all", {});
+  adminToast(d.message || (d.success ? "Started" : "Failed"), d.success);
+}
+async function doBackup() {
+  const d = await apiPostForm("/admin/backup", {});
+  adminToast(d.message || (d.success ? "Backed up" : "Failed"), d.success);
+}
+async function restoreAllSheets() {
+  if (!confirm("Rebuild every active user's Google Sheet tab from the PostgreSQL database? Anything typed directly into the Sheets will be replaced with the DB version.")) return;
+  const d = await apiPostForm("/admin/restore_all_sheets", {});
+  adminToast(d.message || (d.success ? "Started" : "Failed"), d.success);
+}
+
+document.addEventListener("submit", async (e) => {
+  if (e.target.id === "restoreForm") {
+    e.preventDefault();
+    if (!confirm("Restore? Current data will be overwritten.")) return;
+    const fd = new FormData(e.target);
+    const d = await apiPostForm("/admin/restore", { backup_file: fd.get("backup_file") });
+    adminToast(d.message || (d.success ? "Restored" : "Failed"), d.success);
+  }
+});
+
+function renderAdmin(d) {
+  ME_ID = d.__me_id;
+  const chartOpts = () => ({
+    responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+    scales: { x: { ticks: { color: "#555", font: { family: "monospace", size: 9 } }, grid: { color: "rgba(255,255,255,.04)" } },
+              y: { ticks: { color: "#555", font: { family: "monospace", size: 9 } }, grid: { color: "rgba(255,255,255,.04)" }, beginAtZero: true } }
+  });
+
+  const plist = (d.users || []).filter(u => u.status === "pending");
+  const activeRows = (d.users || []).filter(u => u.status !== "pending");
+  const avgPerUser = Math.floor(d.total_subs / Math.max(d.active_users, 1));
+
+  document.getElementById("app").innerHTML = `
+    <div class="admin-topbar">
+      <div>
+        <h2>👑 Admin Panel</h2>
+        <p class="page-sub" style="margin:0;font-size:.8rem;color:var(--muted)">
+          ${d.users.length} users · <span style="color:#34d399">${d.active_users} active</span> · ${d.total_subs} submissions
+          ${d.pending ? `<span class="pending-badge">${d.pending} pending</span>` : ""}
+        </p>
+      </div>
+      <div class="admin-topbar-actions">
+        <a href="daily_tracker.html" class="btn btn-outline">🗂 Daily Tracker</a>
+        <button class="btn btn-primary" onclick="syncAll()">⚡ Sync All</button>
+        <button class="btn btn-outline" onclick="doBackup()">💾 Backup</button>
+        <button class="btn btn-outline" onclick="restoreAllSheets()" title="Rebuild every user's Sheet tab from PostgreSQL">🔄 Restore All Sheets</button>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-icon">👥</div><div><div class="stat-num">${d.users.length}</div><div class="stat-label">Total Users</div></div></div>
+      <div class="stat-card"><div class="stat-icon">✅</div><div><div class="stat-num">${d.active_users}</div><div class="stat-label">Active</div></div></div>
+      <div class="stat-card"><div class="stat-icon">⏳</div><div><div class="stat-num">${d.pending}</div><div class="stat-label">Pending</div></div></div>
+      <div class="stat-card"><div class="stat-icon">📊</div><div><div class="stat-num">${d.total_subs}</div><div class="stat-label">Submissions</div></div></div>
+      <div class="stat-card"><div class="stat-icon">🔢</div><div><div class="stat-num">${avgPerUser}</div><div class="stat-label">Avg / User</div></div></div>
+    </div>
+
+    <div class="charts-row">
+      <div class="chart-card"><h3>📈 Signups — Last 14 Days</h3><div class="chart-wrap"><canvas id="signupChart"></canvas></div></div>
+      <div class="chart-card"><h3>📊 Problems Solved — Last 14 Days</h3><div class="chart-wrap"><canvas id="probChart"></canvas></div></div>
+    </div>
+
+    ${plist.length ? `
+    <div class="table-card pending-section">
+      <div class="table-card-header"><h3>⏳ Pending Verification <span class="pending-badge">${plist.length}</span></h3></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Username</th><th>Email</th><th>Signed Up</th><th>Actions</th></tr></thead>
+        <tbody>
+          ${plist.map(u => `
+            <tr class="pending-row">
+              <td><strong>${u.username}</strong></td>
+              <td class="mono small">${u.email || "—"}</td>
+              <td class="mono small muted">${(u.created_at || "").slice(0, 16)}</td>
+              <td class="actions-cell">
+                <button class="btn-sm btn-approve" onclick="verifyUser(${u.id},'approve')">✓ Approve</button>
+                <button class="btn-sm btn-delete" onclick="verifyUser(${u.id},'reject')">✕ Reject</button>
+              </td>
+            </tr>`).join("")}
+        </tbody>
+      </table></div>
+    </div>` : ""}
+
+    <div class="table-card">
+      <div class="table-card-header">
+        <h3>👤 All Users</h3>
+        <div class="search-bar" style="margin:0;width:220px">
+          <span class="search-icon">🔍</span>
+          <input id="userSearch" type="text" placeholder="Search username / handle…" oninput="filterUsers()">
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="usersTable">
+          <thead><tr><th>ID</th><th>Username</th><th>Status</th><th>Role</th><th>CF</th><th>LC</th><th>AC</th><th>Problems</th><th>LC Import</th><th>Last Sync</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${activeRows.map(u => `
+              <tr class="${u.is_admin ? "row-admin" : ""}" data-username="${(u.username || "").toLowerCase()}" data-cf="${(u.cf_handle || "").toLowerCase()}" data-lc="${(u.lc_handle || "").toLowerCase()}">
+                <td class="mono small muted">${u.id}</td>
+                <td><a href="profile.html?username=${encodeURIComponent(u.username)}" style="font-weight:600;text-decoration:none;color:var(--text)">${u.username}</a></td>
+                <td><span class="status-badge status-${u.status}">${u.status.charAt(0).toUpperCase() + u.status.slice(1)}</span></td>
+                <td>${u.is_admin ? `<span class="role-badge role-admin">Admin</span>` : `<span class="role-badge role-user">User</span>`}</td>
+                <td class="mono small">${u.cf_handle || "—"}</td>
+                <td class="mono small">${u.lc_handle || "—"}</td>
+                <td class="mono small">${u.ac_handle || "—"}</td>
+                <td class="num-highlight">${d.counts[u.id] || 0}</td>
+                <td>${u.lc_imported ? `<span class="lc-badge">✓ Done</span>` : `<span class="muted small">—</span>`}</td>
+                <td class="mono small muted">${(u.last_sync || "—").slice(0, 16)}</td>
+                <td class="actions-cell">
+                  <button class="btn-sm btn-promote" title="Details" onclick="toggleDetail(${u.id})">⋯</button>
+                  <button class="btn-sm btn-sync" title="Sync this user" onclick="syncUser(${u.id}, this)">↻</button>
+                  <button class="btn-sm btn-restore" title="Rebuild this user's Google Sheet from the database" onclick="restoreSheet(${u.id}, '${u.username}', this)">📊</button>
+                  ${u.id !== d.__me_id ? `
+                    <button class="btn-sm btn-promote" title="${u.is_admin ? "Demote" : "Promote to Admin"}" onclick="promoteUser(${u.id})">${u.is_admin ? "↓" : "↑"}</button>
+                    ${u.lc_imported ? `<button class="btn-sm btn-reset" title="Reset LC import flag" onclick="resetLC(${u.id}, this)">⟳LC</button>` : ""}
+                    <button class="btn-sm btn-delete" title="Delete user" onclick="deleteUser(${u.id}, '${u.username}')">✕</button>
+                  ` : `<span class="you-badge">you</span>`}
+                </td>
+              </tr>
+              <tr id="detail-${u.id}" style="display:none">
+                <td colspan="11" class="user-detail-row">
+                  <div class="user-detail-grid">
+                    <div class="detail-item"><div class="dk">Email</div><div class="dv">${u.email || "—"}</div></div>
+                    <div class="detail-item"><div class="dk">Joined</div><div class="dv">${(u.created_at || "—").slice(0, 16)}</div></div>
+                    <div class="detail-item"><div class="dk">Last Login</div><div class="dv">${(u.last_login || "—").slice(0, 16)}</div></div>
+                    <div class="detail-item"><div class="dk">LC Cookie</div><div class="dv">${u.lc_session_cookie ? "✅ Set" : "❌ Not set"}</div></div>
+                    <div class="detail-item"><div class="dk">CSRF Token</div><div class="dv">${u.lc_csrf_token ? "✅ Set" : "❌ Not set"}</div></div>
+                    <div class="detail-item"><div class="dk">Auto Sync</div><div class="dv">${u.auto_sync_enabled ? "✅ On" : "❌ Off"}</div></div>
+                    <div class="detail-item"><div class="dk">Sheet ID</div><div class="dv">${u.sheet_id || "—"}</div></div>
+                    <div class="detail-item"><div class="dk">Bio</div><div class="dv">${u.bio || "—"}</div></div>
+                  </div>
+                </td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="table-card">
+      <div class="table-card-header"><h3>📋 Action Log <span class="muted small">(last 30)</span></h3></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Time</th><th>Action</th><th>Target</th><th>Details</th><th>IP</th></tr></thead>
+        <tbody>
+          ${(d.logs && d.logs.length) ? d.logs.map(log => `
+            <tr>
+              <td class="mono small muted">${(log.created_at || "").slice(0, 16)}</td>
+              <td><span class="log-action">${log.action}</span></td>
+              <td class="mono small">${log.target_user || "—"}</td>
+              <td class="muted small">${log.details || "—"}</td>
+              <td class="mono small muted">${log.ip}</td>
+            </tr>`).join("") : `<tr><td colspan="5" class="empty-state">No logs yet.</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="table-card">
+      <div class="table-card-header"><h3>💾 Backup &amp; Restore</h3></div>
+      <div class="backup-section">
+        <div id="backupList" class="backup-list"><span class="muted small">Loading backups…</span></div>
+        <form id="restoreForm" class="restore-form">
+          <input class="form-input mono" type="text" name="backup_file" id="restoreInput" placeholder="backup_20240101_120000.db" required>
+          <button class="btn btn-outline" type="submit">Restore</button>
+        </form>
+      </div>
+    </div>`;
+
+  if (document.getElementById("signupChart")) {
+    new Chart(document.getElementById("signupChart"), {
+      type: "bar",
+      data: { labels: d.signup_labels, datasets: [{ label: "Signups", data: d.signup_data, backgroundColor: "rgba(52,211,153,.5)", borderColor: "#34d399", borderWidth: 1, borderRadius: 3 }] },
+      options: chartOpts()
+    });
+  }
+  if (document.getElementById("probChart")) {
+    new Chart(document.getElementById("probChart"), {
+      type: "bar",
+      data: { labels: d.prob_labels, datasets: [{ label: "Problems", data: d.prob_data, backgroundColor: "rgba(251,191,36,.5)", borderColor: "#fbbf24", borderWidth: 1, borderRadius: 3 }] },
+      options: chartOpts()
+    });
+  }
+
+  apiGet("/admin/backups_list").then(files => {
+    const el = document.getElementById("backupList");
+    if (!Array.isArray(files) || !files.length) { el.innerHTML = '<span class="muted small">No backups yet.</span>'; return; }
+    el.innerHTML = files.map(f => `
+      <div class="backup-item"><span class="mono small">${f}</span>
+        <button class="btn-sm btn-promote" onclick="document.getElementById('restoreInput').value='${f}'">Use</button></div>`).join("");
+  }).catch(() => {});
+}
+
+(async () => {
+  const me = await requireAuth({ admin: true });
+  if (!me) return;
+  const d = await apiGet("/admin");
+  d.__me_id = me.id;
+  renderAdmin(d);
+})();
+</script>
+</body>
+</html>

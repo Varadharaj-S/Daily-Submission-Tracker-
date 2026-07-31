@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Contest History – DSA Tracker{% endblock %}
+{% block head %}
+<style>
+  .section-card{background:var(--bg2);border:1px solid var(--border);border-radius:18px;padding:1rem;box-shadow:var(--shadow)}
+  .table-wrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:.55rem .7rem;border-bottom:1px solid var(--border2);text-align:left;vertical-align:top}
+  th{font-size:.78rem;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+  td{font-size:.88rem}
+  .empty-state{text-align:center;padding:2.5rem 1rem;color:var(--muted)}
+</style>
+{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h2>📜 Contest History</h2>
+    <p class="page-sub">Completed contests. Per-student results and analytics land here in a later phase.</p>
+  </div>
+  <a href="{{ url_for('student_contest') }}" class="btn btn-outline">← Student Contest</a>
+</div>
+
+<div class="section-card">
+  {% if contests %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Contest</th><th>Code</th><th>Platform</th><th>Date</th></tr>
+      </thead>
+      <tbody>
+        {% for c in contests %}
+        <tr>
+          <td>{{ c.contest_name }}</td>
+          <td><code>{{ c.contest_code }}</code></td>
+          <td>{{ c.platform }}</td>
+          <td>{{ c.contest_date }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">No completed contests yet.</div>
+  {% endif %}
+</div>
+{% endblock %}

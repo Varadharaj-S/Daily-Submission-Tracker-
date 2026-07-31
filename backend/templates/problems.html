@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Problems – DSA Tracker{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div><h2>Problem Table</h2><p class="page-sub">{{ total }} problems</p></div>
+  <a href="{{ url_for('export_csv') }}" class="btn btn-outline">↓ Export CSV</a>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="filter-tabs">
+    {% for p, lbl in [('all','All'),('Codeforces','CF'),('LeetCode','LC'),('AtCoder','AC')] %}
+    <a href="?platform={{ p }}&diff={{ diff }}&q={{ search }}"
+       class="filter-tab {% if platform==p %}active {% if p=='Codeforces' %}cf-tab{% elif p=='LeetCode' %}lc-tab{% elif p=='AtCoder' %}ac-tab{% endif %}{% endif %}">{{ lbl }}</a>
+    {% endfor %}
+  </div>
+  <div class="filter-tabs">
+    {% for d in ['all','Easy','Medium','Hard'] %}
+    <a href="?platform={{ platform }}&diff={{ d }}&q={{ search }}"
+       class="filter-tab {% if diff==d %}active diff-{{ d|lower }}-tab{% endif %}">{{ d }}</a>
+    {% endfor %}
+  </div>
+  <div class="search-wrap">
+    <input type="hidden" name="platform" value="{{ platform }}">
+    <input type="hidden" name="diff"     value="{{ diff }}">
+    <input class="form-input search-input" type="text" name="q" value="{{ search }}" placeholder="Search problems or tags…">
+    <button class="btn btn-outline btn-sm" type="submit">Search</button>
+    {% if search %}<a href="?platform={{ platform }}&diff={{ diff }}" class="btn btn-outline btn-sm">✕</a>{% endif %}
+  </div>
+</form>
+
+<div class="table-card">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Date</th><th>Platform</th><th>Problem</th><th>Difficulty</th><th>Topic</th></tr></thead>
+      <tbody>
+        {% for s in subs %}
+        <tr>
+          <td class="row-num mono">{{ (page-1)*50+loop.index }}</td>
+          <td class="mono small">{{ s.solved_date }}</td>
+          <td><span class="platform-badge platform-{{ s.platform|lower|replace('codeforces','cf')|replace('leetcode','lc')|replace('atcoder','ac') }}">{{ s.platform }}</span></td>
+          <td class="problem-name">
+            {% if s.problem_url %}<a href="{{ s.problem_url }}" target="_blank" class="problem-link">{{ s.problem_name }} ↗</a>
+            {% else %}{{ s.problem_name }}{% endif %}
+          </td>
+          <td><span class="diff-badge diff-{{ (s.difficulty or '')|lower }}">{{ s.difficulty or '—' }}</span></td>
+          <td>{% set first = s.tags.split(';')[0] if s.tags else '' %}
+              {% if first %}<span class="tag-pill">{{ first }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty-state" style="padding:2.5rem;text-align:center">No problems found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if total_pages > 1 %}
+  <div class="pagination">
+    {% if page>1 %}<a href="?platform={{ platform }}&diff={{ diff }}&q={{ search }}&page={{ page-1 }}" class="page-btn">← Prev</a>{% endif %}
+    <span class="page-info mono">{{ page }}/{{ total_pages }}</span>
+    {% if page<total_pages %}<a href="?platform={{ platform }}&diff={{ diff }}&q={{ search }}&page={{ page+1 }}" class="page-btn">Next →</a>{% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

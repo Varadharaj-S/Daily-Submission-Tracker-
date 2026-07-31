@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Contest History – DSA Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+<script src="config.js"></script>
+<style>
+  .section-card{background:var(--bg2);border:1px solid var(--border);border-radius:18px;padding:1rem;box-shadow:var(--shadow)}
+  .table-wrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:.55rem .7rem;border-bottom:1px solid var(--border2);text-align:left;vertical-align:top}
+  th{font-size:.78rem;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+  td{font-size:.88rem}
+  .empty-state{text-align:center;padding:2.5rem 1rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="noise"></div>
+<div class="grid-bg"></div>
+<div id="navContainer"></div>
+<div class="flash-container" id="flashContainer"></div>
+
+<main class="main-content" id="app">Loading…</main>
+
+<script src="assets/js/main.js"></script>
+<script src="assets/js/app.js"></script>
+<script>
+(async () => {
+  const me = await requireAuth({ verified: true });
+  if (!me) return;
+
+  const { contests } = await apiGet("/contest/history");
+
+  document.getElementById("app").innerHTML = `
+  <div class="page-header">
+    <div><h2>📜 Contest History</h2><p class="page-sub">Completed contests. Per-student results and analytics land here in a later phase.</p></div>
+    <a href="contest_dashboard.html" class="btn btn-outline">← Student Contest</a>
+  </div>
+
+  <div class="section-card">
+    ${(contests && contests.length) ? `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Contest</th><th>Code</th><th>Platform</th><th>Date</th></tr></thead>
+        <tbody>
+          ${contests.map(c => `<tr><td>${c.contest_name}</td><td><code>${c.contest_code}</code></td><td>${c.platform}</td><td>${c.contest_date}</td></tr>`).join("")}
+        </tbody>
+      </table>
+    </div>` : `<div class="empty-state">No completed contests yet.</div>`}
+  </div>`;
+})();
+</script>
+</body>
+</html>

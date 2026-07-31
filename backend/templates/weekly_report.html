@@ -1,0 +1,296 @@
+{% extends "base.html" %}
+{% block title %}Weekly Report – DSA Tracker{% endblock %}
+{% block head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+.report-hero {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+}
+.report-stat { text-align: center; }
+.report-stat .rs-num {
+  font-size: 2.2rem; font-weight: 800;
+  font-family: var(--mono);
+  line-height: 1;
+}
+.report-stat .rs-label {
+  font-size: .72rem; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .07em;
+  margin-top: .35rem;
+}
+.rs-good   { color: #34d399; }
+.rs-warn   { color: #fbbf24; }
+.rs-accent { color: var(--accent); }
+.rs-fire   { color: #f87171; }
+
+.topic-row {
+  display: flex; align-items: center; gap: 1rem;
+  padding: .75rem 1rem;
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--radius); margin-bottom: .5rem;
+}
+.topic-row .tr-label { font-size: .8rem; color: var(--muted); width: 5rem; flex-shrink: 0; }
+.topic-row .tr-name  { font-weight: 700; flex: 1; }
+.topic-row .tr-icon  { font-size: 1.2rem; }
+
+.history-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: .75rem;
+}
+.history-card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1rem;
+}
+.history-card .hc-week { font-size: .72rem; color: var(--muted); margin-bottom: .4rem; }
+.history-card .hc-num  { font-size: 1.6rem; font-weight: 800; font-family: var(--mono); color: var(--accent); }
+.history-card .hc-sub  { font-size: .75rem; color: var(--muted); margin-top: .25rem; }
+
+.platform-breakdown { display: flex; gap: .5rem; margin-top: .5rem; flex-wrap: wrap; }
+.pb-item { font-size: .75rem; padding: .2rem .5rem; border-radius: 4px; font-family: var(--mono); }
+.pb-cf { background: rgba(77,157,224,.15); color: #4d9de0; }
+.pb-lc { background: rgba(251,191,36,.15); color: #fbbf24; }
+.pb-ac { background: rgba(52,211,153,.15); color: #34d399; }
+
+/* Admin controls */
+.admin-report-bar {
+  display: flex; gap: .75rem; align-items: center; flex-wrap: wrap;
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: .75rem 1rem;
+  margin-bottom: 1.25rem;
+}
+.admin-report-bar select, .admin-report-bar .btn { font-size: .82rem; }
+.admin-report-label {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); margin-right: .25rem;
+}
+
+/* User breakdown table */
+.breakdown-table { width:100%; border-collapse:collapse; font-size:.82rem; }
+.breakdown-table th {
+  padding:.5rem .75rem; text-align:left;
+  background:rgba(255,255,255,.03); color:var(--muted);
+  border-bottom:1px solid var(--border); font-weight:600;
+}
+.breakdown-table td { padding:.5rem .75rem; border-bottom:1px solid rgba(255,255,255,.04); }
+.breakdown-table tr:last-child td { border-bottom:none; }
+.rank-badge {
+  display:inline-block; width:1.4rem; height:1.4rem; border-radius:50%;
+  text-align:center; line-height:1.4rem; font-size:.72rem; font-weight:700;
+}
+.rank-1 { background:#fbbf24; color:#000; }
+.rank-2 { background:#94a3b8; color:#000; }
+.rank-3 { background:#cd7c4a; color:#fff; }
+.rank-n { background:rgba(255,255,255,.08); color:var(--muted); }
+</style>
+{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <h2>📊 Weekly Report
+      {% if view_all %}<span style="font-size:.9rem;color:var(--muted)"> — All Users</span>
+      {% elif report.label != user.username %}<span style="font-size:.9rem;color:var(--muted)"> — {{ report.label }}</span>
+      {% endif %}
+    </h2>
+    <p class="page-sub">Week of <strong>{{ report.week_start }}</strong></p>
+  </div>
+  <div class="header-actions">
+    <button class="btn btn-primary" onclick="refreshReport()">🔄 Regenerate</button>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-outline">← Dashboard</a>
+  </div>
+</div>
+
+{% if user.is_admin %}
+<!-- Admin Controls Bar -->
+<div class="admin-report-bar">
+  <span class="admin-report-label">👑 Admin View:</span>
+  <a href="{{ url_for('weekly_report', view='all', start=report.week_start) }}"
+     class="btn {% if view_all %}btn-primary{% else %}btn-outline{% endif %} btn-sm">
+    🌐 All Users
+  </a>
+  <a href="{{ url_for('weekly_report', start=report.week_start) }}"
+     class="btn {% if not view_all and not request.args.get('uid') %}btn-primary{% else %}btn-outline{% endif %} btn-sm">
+    👤 My Report
+  </a>
+  {% if all_users %}
+  <form method="GET" action="{{ url_for('weekly_report') }}" style="display:flex;gap:.4rem;align-items:center;">
+    <input type="hidden" name="start" value="{{ report.week_start }}">
+    <select name="uid" class="form-input" style="padding:.3rem .6rem;font-size:.8rem;min-width:140px;">
+      <option value="">— View user —</option>
+      {% for u in all_users %}
+      <option value="{{ u.id }}" {% if target_uid == u.id|string %}selected{% endif %}>{{ u.username }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn btn-outline btn-sm">Go</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- This Week Snapshot -->
+<div class="report-hero">
+  <div class="report-stat">
+    <div class="rs-num rs-accent">{{ report.solved_count }}</div>
+    <div class="rs-label">Solved This Week</div>
+  </div>
+  <div class="report-stat">
+    <div class="rs-num rs-fire">🔥 {{ report.streak }}</div>
+    <div class="rs-label">Active Days</div>
+  </div>
+  <div class="report-stat">
+    <div class="rs-num rs-good">{{ report.cf_count }}</div>
+    <div class="rs-label">Codeforces</div>
+  </div>
+  <div class="report-stat">
+    <div class="rs-num rs-warn">{{ report.lc_count }}</div>
+    <div class="rs-label">LeetCode</div>
+  </div>
+  <div class="report-stat">
+    <div class="rs-num rs-good">{{ report.ac_count }}</div>
+    <div class="rs-label">AtCoder</div>
+  </div>
+</div>
+
+<!-- Admin: Per-user breakdown -->
+{% if view_all and user_breakdown %}
+<div class="table-card" style="margin-bottom:1.5rem">
+  <div class="table-card-header" style="padding:.85rem 1.1rem;border-bottom:1px solid var(--border)">
+    <h3 style="margin:0;font-size:.9rem">🏆 User Leaderboard — This Week</h3>
+    <span style="font-size:.75rem;color:var(--muted)">{{ user_breakdown|length }} active users</span>
+  </div>
+  <div style="overflow-x:auto">
+    <table class="breakdown-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>User</th>
+          <th>Solved</th>
+          <th>CF</th>
+          <th>LC</th>
+          <th>AC</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for uname, stats in user_breakdown.items() %}
+        {% set rank = loop.index %}
+        <tr>
+          <td>
+            <span class="rank-badge {% if rank == 1 %}rank-1{% elif rank == 2 %}rank-2{% elif rank == 3 %}rank-3{% else %}rank-n{% endif %}">
+              {{ rank }}
+            </span>
+          </td>
+          <td><strong>{{ uname }}</strong></td>
+          <td><span style="font-weight:700;color:var(--accent)">{{ stats.solved }}</span></td>
+          <td><span class="pb-item pb-cf">{{ stats.cf }}</span></td>
+          <td><span class="pb-item pb-lc">{{ stats.lc }}</span></td>
+          <td><span class="pb-item pb-ac">{{ stats.ac }}</span></td>
+          <td>
+            {% for u in all_users %}{% if u.username == uname %}
+            <a href="{{ url_for('weekly_report', uid=u.id, start=report.week_start) }}"
+               style="font-size:.72rem;color:var(--muted)">detail →</a>
+            {% endif %}{% endfor %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<form method="GET" action="/weekly_report" class="legend-form">
+  {% if view_all %}<input type="hidden" name="view" value="all">{% endif %}
+  {% if target_uid %}<input type="hidden" name="uid" value="{{ target_uid }}">{% endif %}
+  <div class="legend-box">
+    <div class="legend-title">📅 Custom Range</div>
+    <div class="legend-controls">
+      <input type="date" name="start" class="legend-input">
+      <button type="submit" class="legend-btn">🚀 View Report</button>
+    </div>
+    <div class="legend-hint">Select a start date → shows next 7 days</div>
+  </div>
+</form>
+
+<!-- Topic Analysis -->
+<div class="two-col-grid" style="margin-bottom:1.5rem">
+  <div class="table-card" style="padding:1rem">
+    <div class="card-header"><h3>💪 Strong Topic</h3></div>
+    <div class="topic-row">
+      <span class="tr-icon">🏆</span>
+      <span class="tr-label">Top Topic</span>
+      <span class="tr-name">{{ report.top_topic }}</span>
+    </div>
+    <p class="muted" style="font-size:.8rem;padding:.25rem 0">
+      Most problems solved in <strong>{{ report.top_topic }}</strong> this week.
+    </p>
+  </div>
+  <div class="table-card" style="padding:1rem">
+    <div class="card-header"><h3>🎯 Needs Work</h3></div>
+    <div class="topic-row" style="border-color:rgba(239,68,68,.3)">
+      <span class="tr-icon">📚</span>
+      <span class="tr-label">Weak Topic</span>
+      <span class="tr-name" style="color:#f87171">{{ report.weak_topic }}</span>
+    </div>
+    <p class="muted" style="font-size:.8rem;padding:.25rem 0">
+      Focus more on <strong>{{ report.weak_topic }}</strong> — practice makes perfect.
+    </p>
+  </div>
+</div>
+
+<!-- Report Card Summary Box -->
+<div class="table-card" style="padding:1.25rem;margin-bottom:1.5rem">
+  <div class="card-header"><h3>📋 This Week's Summary</h3>
+    <span class="card-tag">Week of {{ report.week_start }}</span>
+  </div>
+  <pre style="font-family:var(--mono);font-size:.85rem;line-height:1.8;padding:.5rem 0;background:none;border:none;color:var(--text)">Weekly Report — {{ report.label }}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Solved    : {{ report.solved_count }} problems
+CF        : {{ report.cf_count }} | LC: {{ report.lc_count }} | AC: {{ report.ac_count }}
+Top Topic : {{ report.top_topic }}
+Weak Area : {{ report.weak_topic }}
+Streak    : 🔥 {{ report.streak }} active days</pre>
+</div>
+
+<!-- History -->
+{% if history %}
+<div class="table-card" style="padding:1rem;margin-bottom:1.5rem">
+  <div class="card-header"><h3>📅 Past Reports</h3>
+    <span class="card-tag">Last {{ history|length }} weeks</span>
+  </div>
+  <div class="history-grid" style="padding:.75rem 0">
+    {% for h in history %}
+    <div class="history-card">
+      <div class="hc-week">Week of {{ h.week_start }}</div>
+      <div class="hc-num">{{ h.solved_count }}</div>
+      <div class="hc-sub">problems solved</div>
+      <div class="platform-breakdown">
+        <span class="pb-item pb-cf">CF {{ h.cf_count }}</span>
+        <span class="pb-item pb-lc">LC {{ h.lc_count }}</span>
+        <span class="pb-item pb-ac">AC {{ h.ac_count }}</span>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+{% block scripts %}
+<script>
+function refreshReport() {
+  fetch('/api/weekly_report')
+    .then(r => r.json())
+    .then(() => {
+      window.location.reload();
+    });
+}
+</script>
+{% endblock %}

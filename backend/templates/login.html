@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Login – DSA Tracker{% endblock %}
+{% block content %}
+<div class="auth-wrap">
+  <div class="auth-form-side">
+    <div class="auth-card">
+      <div class="auth-logo-wrap">
+        <span class="auth-logo-icon">⚡</span>
+        <div><h1 class="auth-title">DSA<span>Tracker</span></h1>
+          <p class="auth-sub">Your competitive programming HQ</p></div>
+      </div>
+      <form method="POST" class="auth-form">
+        <div class="form-group">
+          <label class="form-label">Username</label>
+          <input class="form-input" type="text" name="username" placeholder="your_handle" autocomplete="username" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <div class="input-wrap">
+            <input class="form-input" type="password" name="password" id="pw1" placeholder="••••••••" required>
+            <button type="button" class="pwd-toggle" onclick="togglePwd('pw1',this)">👁</button>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-full btn-lg">Login →</button>
+      </form>
+      <p class="auth-footer">No account? <a href="{{ url_for('signup') }}">Sign up</a></p>
+    </div>
+  </div>
+  <div class="auth-deco-side">
+    <div class="auth-deco-content">
+      <div class="deco-platforms">
+        <div class="deco-plat cf-deco"><span>CF</span><p>Codeforces</p></div>
+        <div class="deco-plat lc-deco"><span>LC</span><p>LeetCode</p></div>
+        <div class="deco-plat ac-deco"><span>AC</span><p>AtCoder</p></div>
+      </div>
+      <div class="deco-tagline">One dashboard.<br>All platforms.</div>
+    </div>
+  </div>
+</div>
+{% endblock %}

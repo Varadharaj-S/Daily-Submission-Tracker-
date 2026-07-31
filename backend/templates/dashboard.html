@@ -1,0 +1,442 @@
+{% extends "base.html" %}
+{% block title %}Dashboard – DSA Tracker{% endblock %}
+{% block head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  .workflow-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.9rem;margin-bottom:1rem}
+  .workflow-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:1rem 1rem .9rem;box-shadow:var(--shadow)}
+  .workflow-head{display:flex;align-items:center;gap:.7rem;margin-bottom:.6rem}
+  .workflow-head h3{font-size:1rem;font-weight:800;letter-spacing:-.03em}
+  .workflow-step{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:700;font-size:.85rem;background:var(--bg3);border:1px solid var(--border2);color:var(--accent)}
+  .workflow-card p{color:var(--muted);font-size:.85rem;line-height:1.55}
+  .workflow-meta{margin-top:.8rem;display:flex;align-items:center;gap:.65rem;flex-wrap:wrap}
+  .pill{display:inline-flex;align-items:center;padding:.26rem .6rem;border-radius:999px;font-size:.74rem;font-weight:700;background:var(--bg3);border:1px solid var(--border2);color:var(--text)}
+  .workflow-import{border-top:2px solid var(--accent)}
+  .workflow-auto{border-top:2px solid var(--cf)}
+  .workflow-sync{border-top:2px solid var(--success)}
+  .workflow-dashboard{border-top:2px solid #8b5cf6}
+  .sync-settings{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;margin:0 0 1.1rem;padding:.9rem 1rem;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-lg)}
+  .sync-settings label{font-size:.8rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+  .sync-settings input[type="time"]{background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:var(--radius);padding:.52rem .75rem;font-family:var(--mono)}
+</style>
+{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <h2>Dashboard</h2>
+    <p class="page-sub">
+      Welcome back, <strong>{{ user.username }}</strong>
+      {% if user.last_sync %} · Last sync: <span class="mono">{{ user.last_sync }}</span>{% endif %}
+    </p>
+  </div>
+
+  <div class="header-actions">
+    <button id="syncBtn" class="btn btn-primary" onclick="triggerSync()">
+      <span id="syncLabel">⚡ Sync Now</span>
+      <span id="syncSpinner" class="spinner" style="display:none"></span>
+    </button>
+
+    {% if not user.lc_imported %}
+
+<button id="importLcBtn"
+        class="btn btn-import"
+        onclick="importLeetCode()">
+    <span id="importLcLabel">📥 Import Full LC</span>
+    <span id="importLcSpinner"
+          class="spinner"
+          style="display:none"></span>
+</button>
+
+{% else %}
+
+<div class="feedback-card">
+    <h3>⭐ Feedback</h3>
+
+    <textarea
+        id="feedbackText"
+        rows="4"
+        placeholder="Tell us about your experience..."
+        class="form-input"></textarea>
+
+    <button
+        onclick="sendFeedback()"
+        class="btn btn-primary">
+        Send Feedback
+    </button>
+</div>
+
+{% endif %}
+
+    {% if sheet_url %}
+    <a href="{{ sheet_url }}" target="_blank" class="btn btn-outline">📊 Open Sheet</a>
+    {% endif %}
+
+    <a href="{{ url_for('my_sheet') }}" target="_blank" class="btn btn-outline" title="Open your tab in the shared Google Sheet">📄 My Sheet</a>
+    <a href="{{ url_for('daily_tracker') }}" class="btn btn-outline">📘 Daily Tracker</a>
+    <a href="{{ url_for('export_csv') }}" class="btn btn-outline">↓ Export CSV</a>
+    <a href="{{ url_for('public_profile', username=user.username) }}" class="btn btn-outline">🔗 Profile</a>
+  </div>
+</div>
+
+{% if current_user.is_authenticated and current_user.cookie_expiry %}
+<div style="background:#7f1d1d;border:1px solid #ef4444;border-radius:12px;padding:14px 18px;margin-bottom:1rem;display:flex;align-items:center;justify-content:space-between;gap:1rem">
+  <div style="display:flex;align-items:center;gap:.7rem">
+    <span style="font-size:1.3rem">⚠️</span>
+    <div>
+      <strong style="color:#fca5a5">LeetCode session expired</strong>
+      <p style="margin:.2rem 0 0;font-size:.82rem;color:#fecaca">Your LeetCode cookie is no longer valid. Click the DSA Tracker extension and reconnect to resume automatic sync.</p>
+    </div>
+  </div>
+  <a href="https://leetcode.com" target="_blank"
+     style="white-space:nowrap;background:#ef4444;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:.82rem;font-weight:700;cursor:pointer;text-decoration:none">
+    Open LeetCode →
+  </a>
+</div>
+{% endif %}
+
+<div class="info-banner">
+  <strong>Flow:</strong>
+  <span>Import LC runs once → Auto Sync updates daily → Sync Now runs instantly → Dashboard shows the latest totals.</span>
+</div>
+
+<div class="workflow-grid">
+  <div class="workflow-card workflow-import">
+    <div class="workflow-head"><span class="workflow-step">1</span><h3>Import LC</h3></div>
+    <p>First-time LeetCode import using session cookie + CSRF token. Saves all platforms and updates the sheet.</p>
+    <div class="workflow-meta"><span class="pill">{{ 'Done' if user.lc_imported else 'Pending' }}</span></div>
+  </div>
+  <div class="workflow-card workflow-auto">
+    <div class="workflow-head"><span class="workflow-step">2</span><h3>Auto Sync</h3></div>
+    <p>Daily background sync for LeetCode, Codeforces, and AtCoder. Public fetch is used for normal syncs.</p>
+    <div class="workflow-meta">
+      <label class="toggle-label">
+        <input type="checkbox" id="autoSyncToggle" {% if user.auto_sync_enabled %}checked{% endif %} onchange="toggleAutoSync()">
+        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        <span>Enabled</span>
+      </label>
+      <span class="pill">Time: {{ user.sync_time or '09:00' }}</span>
+    </div>
+  </div>
+  <div class="workflow-card workflow-sync">
+    <div class="workflow-head"><span class="workflow-step">3</span><h3>Sync Now</h3></div>
+    <p>Manual refresh using the same incremental fetch flow as auto sync. Handy when you want an instant update.</p>
+    <div class="workflow-meta"><span class="pill">Manual</span></div>
+  </div>
+  <div class="workflow-card workflow-dashboard">
+    <div class="workflow-head"><span class="workflow-step">4</span><h3>Dashboard</h3></div>
+    <p>Track LeetCode, Codeforces, AtCoder, total solved count, streak, topics, and recent activity in one place.</p>
+    <div class="workflow-meta"><span class="pill">Live cards</span></div>
+  </div>
+</div>
+
+<div id="syncStatus" class="sync-status" style="display:none"></div>
+
+<div class="sync-settings">
+  <label>⏰ Auto Sync Time</label>
+  <input type="time" id="syncTime" value="{{ user.sync_time or '09:00' }}">
+  <button onclick="saveSyncTime()" class="btn btn-outline">Save</button>
+</div>
+
+<div class="stats-grid">
+  <div class="stat-card stat-total"><div class="stat-icon">🏆</div><div class="stat-body"><div class="stat-num" data-target="{{ data.total }}">0</div><div class="stat-label">Total Solved</div></div></div>
+  <div class="stat-card stat-cf"><div class="stat-icon">🔵</div><div class="stat-body"><div class="stat-num" data-target="{{ data.cf }}">0</div><div class="stat-label">Codeforces</div></div></div>
+  <div class="stat-card stat-lc"><div class="stat-icon">🟡</div><div class="stat-body"><div class="stat-num" data-target="{{ data.lc }}">0</div><div class="stat-label">LeetCode</div></div></div>
+  <div class="stat-card stat-ac"><div class="stat-icon">🟢</div><div class="stat-body"><div class="stat-num" data-target="{{ data.ac }}">0</div><div class="stat-label">AtCoder</div></div></div>
+  <div class="stat-card stat-streak"><div class="stat-icon">🔥</div><div class="stat-body"><div class="stat-num" data-target="{{ data.streak }}">0</div><div class="stat-label">Day Streak</div></div></div>
+  <div class="stat-card stat-social"><div class="stat-body"><div class="social-row"><span><strong class="stat-num-sm">{{ data.follower_count }}</strong><br><span class="stat-label">Followers</span></span><span class="social-div"></span><span><strong class="stat-num-sm">{{ data.following_count }}</strong><br><span class="stat-label">Following</span></span></div></div></div>
+</div>
+
+{% if data.total > 0 %}
+<div class="breakdown-card">
+  {% for plat, cnt, cls in [('CF', data.cf, 'cf'), ('LC', data.lc, 'lc'), ('AC', data.ac, 'ac')] %}
+  <div class="breakdown-row-item">
+    <span class="platform-badge platform-{{ cls }}">{{ plat }}</span>
+    <div class="breakdown-bar-outer"><div class="breakdown-fill {{ cls }}-fill" style="width:{{ (cnt / data.total * 100)|int if data.total else 0 }}%"></div></div>
+    <span class="breakdown-pct">{{ (cnt / data.total * 100)|int if data.total else 0 }}%</span>
+    <span class="breakdown-num">{{ cnt }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if mentor_tasks %}
+<div class="table-card" style="padding:1rem;margin-bottom:1rem;border-left:3px solid #fbbf24">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem">
+    <h3 style="margin:0;font-size:.9rem">📋 My Tasks</h3>
+    <span style="font-size:.78rem;color:var(--muted)">{{ mentor_tasks|length }} pending · <a href="#mentor-section" style="color:var(--accent)">View all</a></span>
+  </div>
+  {% for t in mentor_tasks[:3] %}
+  <div style="display:flex;align-items:center;gap:.75rem;padding:.4rem 0;border-bottom:1px solid rgba(255,255,255,.05)">
+    <span class="diff-badge diff-{{ t.difficulty|lower }}" style="flex-shrink:0">{{ t.difficulty }}</span>
+    <span style="flex:1;font-size:.83rem;font-weight:600">
+      {% if t.problem_url %}<a href="{{ t.problem_url }}" target="_blank" style="color:var(--text)">{{ t.problem_name }}</a>
+      {% else %}{{ t.problem_name }}{% endif %}
+    </span>
+    {% if t.due_date %}<span style="font-size:.74rem;color:var(--muted);font-family:var(--mono)">Due {{ t.due_date }}</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div id="mentor-section"></div><span class="card-tag">personalized · {{ challenges|selectattr('completed','eq',1)|list|length }}/{{ challenges|length }} done</span></div>
+    <div class="challenges-list">
+      {% for c in challenges %}
+      <div class="challenge-item {% if c.completed %}challenge-done{% endif %}" id="ch-{{ c.id }}">
+        <div class="challenge-check">
+          {% if c.completed %}
+          <span class="check-done">✓</span>
+          {% else %}
+          <button class="check-btn" onclick="completeChallenge({{ c.id }})">○</button>
+          {% endif %}
+        </div>
+        <div class="challenge-body">
+          <a href="{{ c.problem_url }}" target="_blank" class="challenge-name">{{ c.problem_name }} ↗</a>
+          <div class="challenge-meta">
+            <span class="platform-badge platform-{{ c.platform|lower|replace('leetcode','lc')|replace('codeforces','cf')|replace('atcoder','ac') }}">{{ c.platform }}</span>
+            <span class="diff-badge diff-{{ c.difficulty|lower }}">{{ c.difficulty }}</span>
+            <span class="tag-pill">{{ c.topic }}</span>
+          </div>
+        </div>
+      </div>
+      {% else %}
+      <div class="empty-state">No challenges today. Sync your account first.</div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="table-card">
+    <div class="card-header">
+      <h3>🎓 Mentor Assignments</h3>
+      <span class="card-tag">{{ mentor_tasks|length }} pending</span>
+    </div>
+    <div class="challenges-list">
+      {% for t in mentor_tasks %}
+      {% set is_overdue = t.due_date and t.due_date < now().strftime('%Y-%m-%d') %}
+      <div class="challenge-item {% if is_overdue %}challenge-overdue{% endif %}" id="mt-{{ t.id }}">
+        <div class="challenge-check">
+          <button class="check-btn" onclick="completeMentor({{ t.id }})">○</button>
+        </div>
+        <div class="challenge-body" style="flex:1">
+          {% if t.problem_url %}
+          <a href="{{ t.problem_url }}" target="_blank" class="challenge-name">{{ t.problem_name }} ↗</a>
+          {% else %}
+          <span class="challenge-name">{{ t.problem_name }}</span>
+          {% endif %}
+          <div class="challenge-meta">
+            <span class="diff-badge diff-{{ t.difficulty|lower }}">{{ t.difficulty }}</span>
+            <span class="tag-pill">{{ t.topic }}</span>
+            {% if t.due_date %}
+            <span class="tag-pill {% if is_overdue %}overdue-pill{% endif %}">
+              {{ '🔴 Overdue:' if is_overdue else 'Due:' }} {{ t.due_date }}
+            </span>
+            {% endif %}
+          </div>
+          {% if t.note %}<p class="mentor-note">📝 {{ t.note }}</p>{% endif %}
+        </div>
+      </div>
+      {% else %}
+      <div class="empty-state">No assignments from your mentor.</div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="two-col-grid">
+  <div class="chart-card">
+    <div class="card-header"><h3>Activity — Last 30 Days</h3><span class="card-tag">problems/day</span></div>
+    <div class="chart-wrap">
+      {% if data.chart_labels %}
+      <canvas id="actChart"></canvas>
+      {% else %}
+      <div class="empty-state">Sync to see activity.</div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="chart-card">
+    <div class="card-header"><h3>Top Topics</h3><span class="card-tag">by problems solved</span></div>
+    <div class="chart-wrap">
+      {% if data.topic_labels %}
+      <canvas id="topicChart"></canvas>
+      {% else %}
+      <div class="empty-state">Sync to see topics.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="table-card">
+  <div class="card-header"><h3>Recent Problems</h3><a href="{{ url_for('problems') }}" class="card-link">View all →</a></div>
+  {% if data.recent %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Platform</th><th>Problem</th><th>Difficulty</th><th>Date</th></tr></thead>
+      <tbody>
+        {% for p in data.recent %}
+        <tr>
+          <td class="row-num mono">{{ loop.index }}</td>
+          <td><span class="platform-badge platform-{{ p.platform|lower|replace('codeforces','cf')|replace('leetcode','lc')|replace('atcoder','ac') }}">{{ p.platform }}</span></td>
+          <td class="problem-name">{% if p.problem_url %}<a href="{{ p.problem_url }}" target="_blank" class="problem-link">{{ p.problem_name }} ↗</a>{% else %}{{ p.problem_name }}{% endif %}</td>
+          <td><span class="diff-badge diff-{{ (p.difficulty or '')|lower }}">{{ p.difficulty or '—' }}</span></td>
+          <td class="problem-date mono">{{ p.solved_date }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">No submissions yet — click <strong>Sync Now</strong>.</div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<div id="new-count"></div>
+
+<script>
+const actLabels  = {{ data.chart_labels | tojson }};
+const actVals    = {{ data.chart_data   | tojson }};
+const topLabels  = {{ data.topic_labels | tojson }};
+const topVals    = {{ data.topic_data   | tojson }};
+
+if (actLabels.length && document.getElementById('actChart')) {
+  new Chart(document.getElementById('actChart'), {
+    type: 'bar',
+    data: { labels: actLabels, datasets:[{
+      label:'Solved', data: actVals,
+      backgroundColor:'rgba(251,191,36,.65)', borderColor:'#fbbf24',
+      borderWidth:1, borderRadius:3
+    }]},
+    options: { responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{display:false}},
+      scales:{
+        x:{ticks:{color:'#555',font:{family:'Space Mono',size:9}}, grid:{color:'rgba(255,255,255,.04)'}},
+        y:{ticks:{color:'#555',font:{family:'Space Mono',size:9}}, grid:{color:'rgba(255,255,255,.04)'}, beginAtZero:true}
+      }
+    }
+  });
+}
+if (topLabels.length && document.getElementById('topicChart')) {
+  new Chart(document.getElementById('topicChart'), {
+    type: 'doughnut',
+    data: { labels: topLabels, datasets:[{
+      data: topVals,
+      backgroundColor:['#fbbf24','#4d9de0','#34d399','#f87171','#a78bfa','#fb923c','#38bdf8','#4ade80'],
+      borderWidth:2, borderColor:'#101010'
+    }]},
+    options: { responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{labels:{color:'#888',font:{family:'Space Mono',size:10},boxWidth:12}},
+        tooltip:{callbacks:{label: ctx => ` ${ctx.label}: ${ctx.parsed}`}}
+      }
+    }
+  });
+}
+</script>
+
+<script>
+async function importLeetCode() {
+
+    const btn = document.getElementById("importLcBtn");
+    const label = document.getElementById("importLcLabel");
+    const spinner = document.getElementById("importLcSpinner");
+
+    btn.disabled = true;
+
+    if (label) label.innerText = "Importing...";
+    if (spinner) spinner.style.display = "inline-block";
+
+    try {
+
+        const res = await fetch("/import_lc", {
+            method: "POST"
+        });
+
+        const data = await res.json();
+
+        alert(data.message);
+
+        if (data.success) {
+
+            if (label) {
+                label.innerText = "⏳ Import Running...";
+            }
+
+            setTimeout(() => {
+                location.reload();
+            }, 5000);
+
+        }else {
+
+            btn.disabled = false;
+
+            if (label) {
+                label.innerText = "📥 Import Full LC";
+            }
+
+            if (spinner) {
+                spinner.style.display = "none";
+            }
+        }
+
+    } catch (err) {
+
+        console.error(err);
+
+        alert("Import failed");
+
+        btn.disabled = false;
+
+        if (label) {
+            label.innerText = "📥 Import Full LC";
+        }
+
+        if (spinner) {
+            spinner.style.display = "none";
+        }
+    }
+}
+</script>
+
+<script>
+async function sendFeedback() {
+
+    const txt =
+        document.getElementById(
+            "feedbackText"
+        ).value;
+
+    if (!txt.trim()) {
+        alert("Enter feedback");
+        return;
+    }
+
+    const res = await fetch(
+        "/feedback",
+        {
+            method: "POST",
+            headers: {
+                "Content-Type":
+                "application/json"
+            },
+            body: JSON.stringify({
+                feedback: txt
+            })
+        }
+    );
+
+    const data = await res.json();
+
+    if (data.success) {
+
+        alert(
+            "Feedback sent successfully"
+        );
+
+        document.getElementById(
+            "feedbackText"
+        ).value = "";
+    }
+}
+</script>
+{% endblock %}

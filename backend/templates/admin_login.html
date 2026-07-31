@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Admin Login – DSA Tracker{% endblock %}
+{% block content %}
+<div class="auth-wrap">
+  <div class="auth-form-side">
+    <div class="auth-card">
+      <div class="auth-logo-wrap">
+        <span class="auth-logo-icon">👑</span>
+        <div><h1 class="auth-title">Admin<span>Access</span></h1>
+          <p class="auth-sub">Restricted — admins only</p></div>
+      </div>
+      <div class="info-banner danger-banner">
+        <span>🔐</span>
+        <span>This portal is for administrators only. Unauthorized access is logged.</span>
+      </div>
+      <form method="POST" class="auth-form">
+        <div class="form-group">
+          <label class="form-label">Admin Username</label>
+          <input class="form-input" type="text" name="username" placeholder="admin_handle" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Admin Password</label>
+          <div class="input-wrap">
+            <input class="form-input" type="password" name="password" id="apw" placeholder="••••••••" required>
+            <button type="button" class="pwd-toggle" onclick="togglePwd('apw',this)">👁</button>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-accent btn-full btn-lg">Enter Admin Panel →</button>
+      </form>
+      <p class="auth-footer"><a href="{{ url_for('login') }}">← Back to User Login</a></p>
+    </div>
+  </div>
+  <div class="auth-deco-side admin-deco-side">
+    <div class="auth-deco-content">
+      <div class="admin-deco-icon">👑</div>
+      <div class="deco-tagline">Admin Panel<br><span style="font-size:.9rem;color:var(--dim)">Full control</span></div>
+    </div>
+  </div>
+</div>
+{% endblock %}

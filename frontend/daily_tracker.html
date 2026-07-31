@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title id="pageTitle">Daily Tracker – DSA Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+<script src="config.js"></script>
+<style>
+  .tracker-wrap{display:flex;flex-direction:column;gap:1rem}
+  .tracker-hero{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:flex-start}
+  .tracker-hero h2{margin:0;font-size:1.5rem}
+  .tracker-hero p{margin:.35rem 0 0;color:var(--muted)}
+  .tracker-actions{display:flex;gap:.5rem;flex-wrap:wrap}
+  .grid-4{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:1rem}
+  .mini-card{background:var(--bg2);border:1px solid var(--border);border-radius:18px;padding:1rem;box-shadow:var(--shadow)}
+  .mini-card .k{font-size:.75rem;text-transform:uppercase;color:var(--muted);letter-spacing:.08em}
+  .mini-card .v{font-size:1.6rem;font-weight:800;margin-top:.35rem}
+  .section-card{background:var(--bg2);border:1px solid var(--border);border-radius:18px;padding:1rem;box-shadow:var(--shadow)}
+  .section-card h3{margin:0 0 .9rem;font-size:1rem}
+  .table-wrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:.55rem .7rem;border-bottom:1px solid var(--border2);text-align:left;vertical-align:top}
+  th{font-size:.78rem;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+  td{font-size:.88rem}
+  .chip{display:inline-flex;align-items:center;padding:.18rem .55rem;border-radius:999px;background:var(--bg3);border:1px solid var(--border2);margin:.1rem .2rem .1rem 0;font-size:.78rem}
+  .chip.good{background:rgba(16,185,129,.12);color:#34d399}
+  .chip.bad{background:rgba(239,68,68,.12);color:#f87171}
+  .row-stack{display:flex;flex-wrap:wrap;gap:.25rem}
+  .sheet-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem}
+  .sheet-card{background:var(--bg2);border:1px solid var(--border);border-radius:18px;padding:1rem}
+  .sheet-card h4{margin:0 0 .35rem}
+  .sheet-card p{margin:0;color:var(--muted);font-size:.85rem;line-height:1.5}
+  .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.75rem}
+  .form-grid input,.form-grid select,.form-grid textarea{width:100%;background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:.65rem .8rem;border-radius:12px}
+  .form-grid textarea{min-height:88px;resize:vertical}
+  .form-actions{margin-top:.75rem;display:flex;gap:.5rem;flex-wrap:wrap}
+  .muted{color:var(--muted)}
+  .problems-list{display:flex;flex-wrap:wrap;gap:.35rem}
+  .problem-item{padding:.18rem .5rem;border-radius:8px;background:rgba(255,255,255,.04);border:1px solid var(--border2);font-size:.76rem}
+</style>
+</head>
+<body>
+<div class="noise"></div>
+<div class="grid-bg"></div>
+<div id="navContainer"></div>
+<div class="flash-container" id="flashContainer"></div>
+
+<main class="main-content" id="app">Loading…</main>
+
+<script src="assets/js/main.js"></script>
+<script src="assets/js/app.js"></script>
+<script>
+function truncate(s, n) { return (s && s.length > n) ? s.slice(0, n) + "…" : (s || ""); }
+
+async function refreshTracker() {
+  const data = await apiPostForm("/admin/tracker_refresh", {});
+  showToast(data.message || (data.success ? "Refreshed." : "Failed."), data.success ? "success" : "error");
+  if (data.success) location.reload();
+}
+
+document.addEventListener("submit", async (e) => {
+  if (e.target.id === "createSheetForm") {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target).entries());
+    const data = await apiPostForm("/admin/tracker_sheets/create", fd);
+    showToast(data.message || (data.success ? "Created." : "Failed."), data.success ? "success" : "error");
+    if (data.success) location.reload();
+  }
+  if (e.target.id === "resultForm") {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target).entries());
+    const data = await apiPostForm("/admin/tracker_results/create", fd);
+    showToast(data.message || (data.success ? "Saved." : "Failed."), data.success ? "success" : "error");
+    if (data.success) location.reload();
+  }
+});
+
+(async () => {
+  const me = await requireAuth({ verified: true });
+  if (!me) return;
+
+  const username = qs("username");
+  const path = (me.is_admin && !username) ? "/daily_tracker" : `/student_sheet/${encodeURIComponent(username || me.username)}`;
+  const res = await apiGet(path);
+  if (res.redirect) { window.location.href = res.redirect; return; }
+
+  const { is_admin, sheets, results, daily_rows, summary_cards, users, page_title } = res;
+  document.getElementById("pageTitle").textContent = `${page_title || "Daily Tracker"} – DSA Tracker`;
+
+  const sc = summary_cards || {};
+  const heroCards = is_admin ? `
+    <div class="grid-4">
+      ${[["students", "Total Students"], ["active_today", "Active Today"], ["total_solved", "Problems Solved"], ["sheets", "Sheets"]].map(([k, lbl]) => `
+        <div class="mini-card"><div class="k">${lbl}</div><div class="v">${sc[k] || 0}</div></div>`).join("")}
+    </div>` : (() => {
+      const todaySolved = sc.today_solved || 0, todayTarget = sc.today_target || 10;
+      const pct = todayTarget > 0 ? Math.min(Math.floor(todaySolved / todayTarget * 100), 100) : 0;
+      const color = pct >= 100 ? "#22c55e" : pct > 0 ? "#f59e0b" : "#ef4444";
+      const label = pct >= 100 ? "🟢 Completed" : pct > 0 ? "🟡 In Progress" : "🔴 Not Started";
+      return `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem;margin-bottom:1.5rem">
+        <div class="mini-card" style="padding:1.25rem">
+          <div class="k">🔥 Today's Progress</div>
+          <div style="font-size:1.4rem;font-weight:800;margin:.4rem 0">${todaySolved} / ${todayTarget} <span style="font-size:.85rem;font-weight:500;color:var(--muted)">problems</span></div>
+          <div style="background:var(--border);border-radius:8px;height:10px;overflow:hidden;margin:.5rem 0"><div style="width:${pct}%;height:100%;background:${color};border-radius:8px"></div></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:.3rem">
+            <span style="font-size:.8rem;color:${color}">${label}</span>
+            ${sc.today_remaining > 0 ? `<span style="font-size:.8rem;color:var(--muted)">${sc.today_remaining} remaining</span>` : ""}
+          </div>
+        </div>
+        <div class="mini-card"><div class="k">📊 Total Solved</div><div class="v">${sc.total_solved || 0}</div></div>
+        <div class="mini-card"><div class="k">🔥 Current Streak</div><div class="v">${sc.current_streak || 0} <span style="font-size:1rem;font-weight:500">days</span></div></div>
+        ${sc.last_problem ? `
+        <div class="mini-card"><div class="k">✅ Last Solved</div>
+          <div style="font-size:.95rem;font-weight:700;margin-top:.35rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${sc.last_problem}">${truncate(sc.last_problem, 32)}</div>
+          <div style="font-size:.75rem;color:var(--muted);margin-top:.2rem">${sc.last_solved_date || ""}</div>
+        </div>` : ""}
+      </div>`;
+    })();
+
+  const sheetOptions = (sheets || []).map(s => `<option value="${s.id}">${s.name} (${s.sheet_type})</option>`).join("");
+
+  document.getElementById("app").innerHTML = `
+  <div class="tracker-wrap">
+    <div class="tracker-hero">
+      <div>
+        <h2>${page_title || "Daily Tracker"}</h2>
+        ${is_admin ? `<p>Master sheet with access to all student tracker data. Students cannot view each other's sheets.</p>`
+                   : `<p>Private sheet for <strong>${res.view_username}</strong>. Only this student and admin can open it.</p>`}
+      </div>
+      <div class="tracker-actions">
+        ${is_admin ? `<button class="btn btn-outline" onclick="refreshTracker()">↻ Refresh Auto Sheets</button>` : ""}
+        ${!is_admin ? `<a class="btn btn-outline" href="#" onclick="openMySheet();return false;">My Sheet</a>` : ""}
+      </div>
+    </div>
+
+    ${heroCards}
+
+    ${is_admin ? `
+    <div class="section-card">
+      <h3>➕ Create New Sheet</h3>
+      <form id="createSheetForm">
+        <div class="form-grid">
+          <div><label class="muted">Sheet Name</label><input name="name" placeholder="Contest Attendance" required></div>
+          <div><label class="muted">Sheet Type</label>
+            <select name="sheet_type">
+              <option value="daily_problems">Daily Problems</option>
+              <option value="weekly_assignment">Weekly Assignment</option>
+              <option value="contest_attendance">Contest Attendance</option>
+              <option value="monthly_goal">Monthly Goal</option>
+              <option value="placement_eligibility">Placement Eligibility</option>
+              <option value="topic_verification">Topic Verification</option>
+              <option value="coding_attendance">Coding Attendance</option>
+              <option value="custom">Custom Sheets</option>
+            </select>
+          </div>
+          <div><label class="muted">Target Value</label><input name="target_value" type="number" value="0" min="0"></div>
+          <div><label class="muted">Target Topic / Hard Count</label><input name="target_topic" placeholder="Graphs / 50"></div>
+          <div><label class="muted">Visibility</label>
+            <select name="visibility"><option value="private">Private</option><option value="department">Department</option><option value="public">Public</option></select>
+          </div>
+          <div style="grid-column:1/-1"><label class="muted">Description</label><textarea name="description" placeholder="Short description about the sheet"></textarea></div>
+        </div>
+        <div class="form-actions"><button class="btn btn-primary" type="submit">Create Sheet</button></div>
+      </form>
+    </div>
+
+    <div class="section-card">
+      <h3>📝 Manual Sheet Result</h3>
+      <form id="resultForm">
+        <div class="form-grid">
+          <div><label class="muted">Sheet</label><select name="sheet_id">${sheetOptions}</select></div>
+          <div><label class="muted">Username</label><input name="username" placeholder="Varun" required></div>
+          <div><label class="muted">Status</label><input name="status" placeholder="YES / NO / Present / Absent" required></div>
+          <div><label class="muted">Solved Count</label><input name="solved_count" type="number" value="0" min="0"></div>
+          <div style="grid-column:1/-1"><label class="muted">Remarks</label><textarea name="remarks" placeholder="Any note or verification reason"></textarea></div>
+        </div>
+        <div class="form-actions"><button class="btn btn-primary" type="submit">Save Result</button></div>
+      </form>
+    </div>` : ""}
+
+    <div class="section-card">
+      <h3>📂 Sheets Overview</h3>
+      <div class="sheet-grid">
+        ${(sheets || []).map(s => `
+          <div class="sheet-card"><h4>${s.name}</h4>
+            <div class="row-stack">
+              <span class="chip">${s.sheet_type}</span>
+              ${s.target_value ? `<span class="chip">Target: ${s.target_value}</span>` : ""}
+              ${s.target_topic ? `<span class="chip">Topic: ${s.target_topic}</span>` : ""}
+            </div>
+            <p>${s.description || "No description"}</p>
+          </div>`).join("")}
+      </div>
+    </div>
+
+    <div class="section-card">
+      <h3>📊 Daily Problems</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Date</th>${is_admin ? "<th>Username</th>" : ""}<th>Solved</th><th>Easy</th><th>Medium</th><th>Hard</th><th>Problems</th></tr></thead>
+          <tbody>
+            ${(daily_rows && daily_rows.length) ? daily_rows.map(r => `
+              <tr>
+                <td class="mono">${r.date}</td>
+                ${is_admin ? `<td><strong>${r.username}</strong></td>` : ""}
+                <td><span class="chip good">${r.solved_count}</span></td>
+                <td>${r.easy}</td><td>${r.medium}</td><td>${r.hard}</td>
+                <td><div class="problems-list">${(r.problems || []).map(p => `
+                  <span class="problem-item">${p.url ? `<a href="${p.url}" target="_blank">${p.name}</a>` : p.name}${p.difficulty ? " · " + p.difficulty : ""}</span>`).join("")}</div></td>
+              </tr>`).join("") : `<tr><td colspan="7" class="muted">No problem logs yet.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section-card">
+      <h3>✅ Verification Results</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Sheet</th><th>Student</th><th>Status</th><th>Solved Count</th><th>Remarks</th><th>Updated</th></tr></thead>
+          <tbody>
+            ${(results && results.length) ? results.map(r => `
+              <tr>
+                <td>${r.sheet_name}</td><td>${r.username}</td>
+                <td>${["YES", "Present"].includes(r.status) ? `<span class="chip good">${r.status}</span>` : `<span class="chip bad">${r.status}</span>`}</td>
+                <td>${r.solved_count}</td><td>${r.remarks || "-"}</td><td class="mono">${r.updated_at || "-"}</td>
+              </tr>`).join("") : `<tr><td colspan="6" class="muted">No verification results yet.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    ${(is_admin && users && users.length) ? `
+    <div class="section-card">
+      <h3>👨‍🎓 Student Sheets</h3>
+      <div class="sheet-grid">
+        ${users.map(u => `<div class="sheet-card"><h4><a href="daily_tracker.html?username=${encodeURIComponent(u.username)}">${u.username}</a></h4><p>Open the private sheet for this student.</p></div>`).join("")}
+      </div>
+    </div>` : ""}
+  </div>`;
+})();
+</script>
+</body>
+</html>

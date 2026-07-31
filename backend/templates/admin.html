@@ -1,0 +1,538 @@
+{% extends "base.html" %}
+{% block title %}Admin Panel – DSA Tracker{% endblock %}
+{% block head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+/* ── Admin Panel Styles ── */
+.admin-wrap { display:flex; flex-direction:column; gap:1.5rem; }
+
+/* Top bar */
+.admin-topbar {
+  display:flex; align-items:center; justify-content:space-between;
+  flex-wrap:wrap; gap:.75rem;
+}
+.admin-topbar h2 { font-size:1.4rem; margin:0; }
+.admin-topbar-actions { display:flex; gap:.5rem; flex-wrap:wrap; }
+
+/* Stat cards */
+.stats-grid {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  gap:1rem;
+}
+.stat-card {
+  background:var(--card-bg);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:1rem 1.2rem;
+  display:flex; align-items:center; gap:.9rem;
+}
+.stat-icon { font-size:1.6rem; }
+.stat-num  { font-size:1.6rem; font-weight:700; line-height:1; }
+.stat-label{ font-size:.72rem; color:var(--muted); margin-top:.2rem; text-transform:uppercase; letter-spacing:.05em; }
+
+/* Charts */
+.charts-row { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+@media(max-width:700px){ .charts-row{ grid-template-columns:1fr; } }
+.chart-card {
+  background:var(--card-bg); border:1px solid var(--border);
+  border-radius:10px; padding:1rem;
+}
+.chart-card h3 { font-size:.85rem; margin:0 0 .75rem; color:var(--muted); }
+.chart-wrap { height:160px; }
+
+/* Search bar */
+.search-bar {
+  display:flex; align-items:center; gap:.6rem;
+  background:var(--card-bg); border:1px solid var(--border);
+  border-radius:8px; padding:.4rem .75rem;
+  margin-bottom:.75rem;
+}
+.search-bar input {
+  background:transparent; border:none; outline:none;
+  color:var(--text); flex:1; font-size:.88rem;
+}
+.search-bar .search-icon { color:var(--muted); }
+
+/* Table card */
+.table-card {
+  background:var(--card-bg); border:1px solid var(--border);
+  border-radius:10px; overflow:hidden;
+}
+.table-card-header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:.85rem 1.1rem; border-bottom:1px solid var(--border);
+  flex-wrap:wrap; gap:.5rem;
+}
+.table-card-header h3 { margin:0; font-size:.9rem; }
+.table-wrap { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:.82rem; }
+thead th {
+  padding:.55rem .8rem; text-align:left;
+  background:rgba(255,255,255,.03);
+  color:var(--muted); font-weight:600;
+  border-bottom:1px solid var(--border);
+  white-space:nowrap;
+}
+tbody tr { border-bottom:1px solid rgba(255,255,255,.04); transition:background .15s; }
+tbody tr:last-child { border-bottom:none; }
+tbody tr:hover { background:rgba(255,255,255,.03); }
+tbody td { padding:.55rem .8rem; vertical-align:middle; }
+
+/* Badges */
+.status-badge {
+  display:inline-block; padding:.18rem .55rem;
+  border-radius:20px; font-size:.7rem; font-weight:600; text-transform:uppercase;
+}
+.status-active  { background:rgba(52,211,153,.15); color:#34d399; }
+.status-pending { background:rgba(251,191,36,.15);  color:#fbbf24; }
+.status-banned  { background:rgba(239,68,68,.15);   color:#ef4444; }
+.role-badge {
+  display:inline-block; padding:.15rem .5rem;
+  border-radius:4px; font-size:.68rem; font-weight:700; text-transform:uppercase;
+}
+.role-admin { background:rgba(167,139,250,.2); color:#a78bfa; }
+.role-user  { background:rgba(148,163,184,.1); color:#94a3b8; }
+.lc-badge   { background:rgba(251,191,36,.15); color:#fbbf24; font-size:.7rem; padding:.1rem .4rem; border-radius:4px; }
+.you-badge  { font-size:.68rem; color:var(--muted); padding:.2rem .5rem; background:rgba(255,255,255,.05); border-radius:4px; }
+.pending-badge { background:#fbbf24; color:#000; border-radius:20px; font-size:.7rem; padding:.15rem .5rem; margin-left:.4rem; font-weight:700; }
+
+/* Action buttons */
+.actions-cell { display:flex; align-items:center; gap:.35rem; flex-wrap:wrap; }
+.btn-sm {
+  padding:.25rem .55rem; border-radius:5px; border:none;
+  cursor:pointer; font-size:.72rem; font-weight:600;
+  transition:opacity .15s, transform .1s; display:inline-flex; align-items:center; gap:.25rem;
+}
+.btn-sm:hover { opacity:.85; transform:translateY(-1px); }
+.btn-approve { background:rgba(52,211,153,.2); color:#34d399; }
+.btn-delete  { background:rgba(239,68,68,.2);  color:#ef4444; }
+.btn-promote { background:rgba(167,139,250,.2);color:#a78bfa; }
+.btn-sync    { background:rgba(77,157,224,.2);  color:#4d9de0; }
+.btn-reset   { background:rgba(251,191,36,.15); color:#fbbf24; }
+.btn-restore { background:rgba(52,211,153,.15); color:#34d399; }
+.btn-spin    { animation:spin .7s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* Pending section */
+.pending-section { border-color:#fbbf24 !important; }
+.pending-row td  { background:rgba(251,191,36,.04); }
+
+/* Log table */
+.log-action {
+  font-size:.72rem; font-family:monospace;
+  background:rgba(255,255,255,.06); padding:.1rem .4rem; border-radius:4px;
+}
+
+/* Backup section */
+.backup-section { padding:1rem 1.1rem; }
+.backup-list { display:flex; flex-direction:column; gap:.4rem; margin-bottom:.75rem; max-height:180px; overflow-y:auto; }
+.backup-item { display:flex; align-items:center; justify-content:space-between; background:rgba(255,255,255,.04); padding:.4rem .7rem; border-radius:6px; }
+.restore-form { display:flex; gap:.5rem; flex-wrap:wrap; }
+.restore-form input { flex:1; min-width:180px; }
+
+/* Tabs */
+.admin-tabs { display:flex; gap:.25rem; margin-bottom:1rem; border-bottom:1px solid var(--border); }
+.admin-tab {
+  padding:.5rem 1rem; cursor:pointer; font-size:.82rem; font-weight:600;
+  border:none; background:transparent; color:var(--muted);
+  border-bottom:2px solid transparent; transition:all .15s; margin-bottom:-1px;
+}
+.admin-tab.active { color:var(--text); border-bottom-color:var(--accent,#4d9de0); }
+
+/* User expand row */
+.user-detail-row td { background:rgba(255,255,255,.02) !important; padding:.75rem 1rem; }
+.user-detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:.6rem; }
+.detail-item { font-size:.78rem; }
+.detail-item .dk { color:var(--muted); margin-bottom:.15rem; font-size:.68rem; text-transform:uppercase; }
+.detail-item .dv { font-family:monospace; word-break:break-all; }
+
+.mono   { font-family:monospace; }
+.small  { font-size:.78rem; }
+.muted  { color:var(--muted); }
+.num-highlight { font-weight:700; color:var(--accent,#4d9de0); }
+.row-admin { background:rgba(167,139,250,.04) !important; }
+.empty-state { color:var(--muted); text-align:center; padding:2rem; }
+
+/* Toast */
+#toast {
+  position:fixed; bottom:1.5rem; right:1.5rem; z-index:999;
+  background:#1e293b; border:1px solid var(--border); color:#e2e8f0;
+  padding:.6rem 1rem; border-radius:8px; font-size:.82rem;
+  opacity:0; transform:translateY(8px);
+  transition:opacity .3s, transform .3s; pointer-events:none;
+}
+#toast.show { opacity:1; transform:translateY(0); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="admin-wrap">
+
+<!-- ── Top Bar ── -->
+<div class="admin-topbar">
+  <div>
+    <h2>👑 Admin Panel</h2>
+    <p class="page-sub" style="margin:0;font-size:.8rem;color:var(--muted)">
+      {{ users|length }} users ·
+      <span style="color:#34d399">{{ active_users }} active</span> ·
+      {{ total_subs }} submissions
+      {% if pending %}<span class="pending-badge">{{ pending }} pending</span>{% endif %}
+    </p>
+  </div>
+  <div class="admin-topbar-actions">
+      <a href="{{ url_for('daily_tracker') }}" class="btn btn-outline">🗂 Daily Tracker</a>
+    <form method="POST" action="{{ url_for('admin_sync_all') }}"
+          onsubmit="return confirm('Sync all active users in background?')">
+      <button class="btn btn-primary" type="submit">⚡ Sync All</button>
+    </form>
+    <form method="POST" action="{{ url_for('admin_backup') }}">
+      <button class="btn btn-outline" type="submit">💾 Backup</button>
+    </form>
+    <form method="POST" action="{{ url_for('admin_restore_all_sheets') }}"
+          onsubmit="return confirm('Rebuild every active user\'s Google Sheet tab from the PostgreSQL database? Anything typed directly into the Sheets will be replaced with the DB version.')">
+      <button class="btn btn-outline" type="submit" title="Rebuild every user's Sheet tab from PostgreSQL">🔄 Restore All Sheets</button>
+    </form>
+  </div>
+</div>
+
+<!-- ── Stats ── -->
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="stat-icon">👥</div>
+    <div><div class="stat-num">{{ users|length }}</div><div class="stat-label">Total Users</div></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon">✅</div>
+    <div><div class="stat-num">{{ active_users }}</div><div class="stat-label">Active</div></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon">⏳</div>
+    <div><div class="stat-num">{{ pending }}</div><div class="stat-label">Pending</div></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon">📊</div>
+    <div><div class="stat-num">{{ total_subs }}</div><div class="stat-label">Submissions</div></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon">🔢</div>
+    <div><div class="stat-num">{{ (total_subs / [active_users,1]|max)|int }}</div><div class="stat-label">Avg / User</div></div>
+  </div>
+</div>
+
+<!-- ── Charts ── -->
+<div class="charts-row">
+  <div class="chart-card">
+    <h3>📈 Signups — Last 14 Days</h3>
+    <div class="chart-wrap"><canvas id="signupChart"></canvas></div>
+  </div>
+  <div class="chart-card">
+    <h3>📊 Problems Solved — Last 14 Days</h3>
+    <div class="chart-wrap"><canvas id="probChart"></canvas></div>
+  </div>
+</div>
+
+<!-- ── Pending Approvals ── -->
+{% set plist = users|selectattr('status','eq','pending')|list %}
+{% if plist %}
+<div class="table-card pending-section">
+  <div class="table-card-header">
+    <h3>⏳ Pending Verification <span class="pending-badge">{{ plist|length }}</span></h3>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Username</th><th>Email</th><th>Signed Up</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% for u in plist %}
+        <tr class="pending-row">
+          <td><strong>{{ u.username }}</strong></td>
+          <td class="mono small">{{ u.email or '—' }}</td>
+          <td class="mono small muted">{{ (u.created_at or '')[:16] }}</td>
+          <td class="actions-cell">
+            <form method="POST" action="{{ url_for('admin_verify', uid=u.id) }}" style="display:inline">
+              <input type="hidden" name="action" value="approve">
+              <button class="btn-sm btn-approve" type="submit">✓ Approve</button>
+            </form>
+            <form method="POST" action="{{ url_for('admin_verify', uid=u.id) }}" style="display:inline">
+              <input type="hidden" name="action" value="reject">
+              <button class="btn-sm btn-delete" type="submit">✕ Reject</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- ── All Users ── -->
+<div class="table-card">
+  <div class="table-card-header">
+    <h3>👤 All Users</h3>
+    <div class="search-bar" style="margin:0;width:220px">
+      <span class="search-icon">🔍</span>
+      <input id="userSearch" type="text" placeholder="Search username / handle…" oninput="filterUsers()">
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="admin-table" id="usersTable">
+      <thead>
+        <tr>
+          <th>ID</th><th>Username</th><th>Status</th><th>Role</th>
+          <th>CF</th><th>LC</th><th>AC</th>
+          <th>Problems</th><th>LC Import</th><th>Last Sync</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}{% if u.status != 'pending' %}
+        <tr class="{{ 'row-admin' if u.is_admin else '' }}" data-username="{{ u.username|lower }}" data-cf="{{ (u.cf_handle or '')|lower }}" data-lc="{{ (u.lc_handle or '')|lower }}">
+          <td class="mono small muted">{{ u.id }}</td>
+          <td>
+            <a href="{{ url_for('public_profile', username=u.username) }}"
+               style="font-weight:600;text-decoration:none;color:var(--text)">{{ u.username }}</a>
+          </td>
+          <td><span class="status-badge status-{{ u.status }}">{{ u.status|title }}</span></td>
+          <td>
+            {% if u.is_admin %}<span class="role-badge role-admin">Admin</span>
+            {% else %}<span class="role-badge role-user">User</span>{% endif %}
+          </td>
+          <td class="mono small">{{ u.cf_handle or '—' }}</td>
+          <td class="mono small">{{ u.lc_handle or '—' }}</td>
+          <td class="mono small">{{ u.ac_handle or '—' }}</td>
+          <td class="num-highlight">{{ counts[u.id] }}</td>
+          <td>
+            {% if u.lc_imported %}<span class="lc-badge">✓ Done</span>
+            {% else %}<span class="muted small">—</span>{% endif %}
+          </td>
+          <td class="mono small muted">{{ (u.last_sync or '—')[:16] }}</td>
+          <td class="actions-cell">
+            <!-- Expand details -->
+            <button class="btn-sm btn-promote" title="Details"
+                    onclick="toggleDetail({{ u.id }})">⋯</button>
+
+            <!-- Per-user sync -->
+            <button class="btn-sm btn-sync" title="Sync this user"
+                    onclick="syncUser({{ u.id }}, this)">↻</button>
+
+            <!-- Restore this user's Sheet tab from PostgreSQL -->
+            <button class="btn-sm btn-restore" title="Rebuild this user's Google Sheet from the database"
+                    onclick="restoreSheet({{ u.id }}, '{{ u.username }}', this)">📊</button>
+
+            {% if u.id != current_user.id %}
+            <!-- Promote/Demote -->
+            <form method="POST" action="{{ url_for('admin_promote', uid=u.id) }}" style="display:inline">
+              <button class="btn-sm btn-promote" title="{{ 'Demote' if u.is_admin else 'Promote to Admin' }}" type="submit">
+                {{ '↓' if u.is_admin else '↑' }}
+              </button>
+            </form>
+
+            <!-- Reset LC import -->
+            {% if u.lc_imported %}
+            <button class="btn-sm btn-reset" title="Reset LC import flag"
+                    onclick="resetLC({{ u.id }}, this)">⟳LC</button>
+            {% endif %}
+
+            <!-- Delete -->
+            <form method="POST" action="{{ url_for('admin_delete', uid=u.id) }}" style="display:inline"
+                  onsubmit="return confirm('Delete {{ u.username }}? This cannot be undone.')">
+              <button class="btn-sm btn-delete" type="submit" title="Delete user">✕</button>
+            </form>
+            {% else %}<span class="you-badge">you</span>{% endif %}
+          </td>
+        </tr>
+        <!-- Expandable detail row -->
+        <tr id="detail-{{ u.id }}" style="display:none">
+          <td colspan="11" class="user-detail-row">
+            <div class="user-detail-grid">
+              <div class="detail-item"><div class="dk">Email</div><div class="dv">{{ u.email or '—' }}</div></div>
+              <div class="detail-item"><div class="dk">Joined</div><div class="dv">{{ (u.created_at or '—')[:16] }}</div></div>
+              <div class="detail-item"><div class="dk">Last Login</div><div class="dv">{{ (u.last_login or '—')[:16] }}</div></div>
+              <div class="detail-item"><div class="dk">LC Cookie</div><div class="dv">{{ '✅ Set' if u.lc_session_cookie else '❌ Not set' }}</div></div>
+              <div class="detail-item"><div class="dk">CSRF Token</div><div class="dv">{{ '✅ Set' if u.lc_csrf_token else '❌ Not set' }}</div></div>
+              <div class="detail-item"><div class="dk">Auto Sync</div><div class="dv">{{ '✅ On' if u.auto_sync_enabled else '❌ Off' }}</div></div>
+              <div class="detail-item"><div class="dk">Sheet ID</div><div class="dv">{{ u.sheet_id or '—' }}</div></div>
+              <div class="detail-item"><div class="dk">Bio</div><div class="dv">{{ u.bio or '—' }}</div></div>
+            </div>
+          </td>
+        </tr>
+        {% endif %}{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Admin Action Log ── -->
+<div class="table-card">
+  <div class="table-card-header"><h3>📋 Action Log <span class="muted small">(last 30)</span></h3></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Time</th><th>Action</th><th>Target</th><th>Details</th><th>IP</th></tr></thead>
+      <tbody>
+        {% for log in logs %}
+        <tr>
+          <td class="mono small muted">{{ log.created_at[:16] }}</td>
+          <td><span class="log-action">{{ log.action }}</span></td>
+          <td class="mono small">{{ log.target_user or '—' }}</td>
+          <td class="muted small">{{ log.details or '—' }}</td>
+          <td class="mono small muted">{{ log.ip }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty-state">No logs yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Backup & Restore ── -->
+<div class="table-card">
+  <div class="table-card-header"><h3>💾 Backup &amp; Restore</h3></div>
+  <div class="backup-section">
+    <div id="backupList" class="backup-list"><span class="muted small">Loading backups…</span></div>
+    <form method="POST" action="{{ url_for('admin_restore') }}" class="restore-form"
+          onsubmit="return confirm('Restore? Current data will be overwritten.')">
+      <input class="form-input mono" type="text" name="backup_file" id="restoreInput"
+             placeholder="backup_20240101_120000.db" required>
+      <button class="btn btn-outline" type="submit">Restore</button>
+    </form>
+  </div>
+</div>
+
+</div><!-- end admin-wrap -->
+
+<!-- Toast -->
+<div id="toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Charts ──
+const sLabels = {{ signup_labels | tojson }};
+const sData   = {{ signup_data   | tojson }};
+const pLabels = {{ prob_labels   | tojson }};
+const pData   = {{ prob_data     | tojson }};
+
+const chartOpts = () => ({
+  responsive:true, maintainAspectRatio:false,
+  plugins:{legend:{display:false}},
+  scales:{
+    x:{ticks:{color:'#555',font:{family:'monospace',size:9}},grid:{color:'rgba(255,255,255,.04)'}},
+    y:{ticks:{color:'#555',font:{family:'monospace',size:9}},grid:{color:'rgba(255,255,255,.04)'},beginAtZero:true}
+  }
+});
+
+if(document.getElementById('signupChart')){
+  new Chart(document.getElementById('signupChart'),{
+    type:'bar',
+    data:{labels:sLabels,datasets:[{label:'Signups',data:sData,
+      backgroundColor:'rgba(52,211,153,.5)',borderColor:'#34d399',borderWidth:1,borderRadius:3}]},
+    options:chartOpts()
+  });
+}
+if(document.getElementById('probChart')){
+  new Chart(document.getElementById('probChart'),{
+    type:'bar',
+    data:{labels:pLabels,datasets:[{label:'Problems',data:pData,
+      backgroundColor:'rgba(251,191,36,.5)',borderColor:'#fbbf24',borderWidth:1,borderRadius:3}]},
+    options:chartOpts()
+  });
+}
+
+// ── Toast ──
+function showToast(msg, ok=true){
+  const t = document.getElementById('toast');
+  t.textContent = (ok ? '✅ ' : '❌ ') + msg;
+  t.style.borderColor = ok ? '#34d399' : '#ef4444';
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 3000);
+}
+
+// ── User search filter ──
+function filterUsers(){
+  const q = document.getElementById('userSearch').value.toLowerCase();
+  document.querySelectorAll('#usersTable tbody tr').forEach(tr => {
+    if(tr.id && tr.id.startsWith('detail-')){ tr.style.display='none'; return; }
+    const match = !q ||
+      (tr.dataset.username||'').includes(q) ||
+      (tr.dataset.cf||'').includes(q) ||
+      (tr.dataset.lc||'').includes(q);
+    tr.style.display = match ? '' : 'none';
+  });
+}
+
+// ── Toggle detail row ──
+function toggleDetail(uid){
+  const row = document.getElementById('detail-'+uid);
+  if(!row) return;
+  row.style.display = row.style.display === 'none' ? '' : 'none';
+}
+
+// ── Per-user sync ──
+function syncUser(uid, btn){
+  const icon = btn.textContent;
+  btn.classList.add('btn-spin');
+  btn.disabled = true;
+  fetch(`/admin/sync_user/${uid}`, {method:'POST',
+    headers:{'X-CSRFToken': document.cookie.match(/csrf[^=]*=([^;]+)/)?.[1]||''}
+  })
+  .then(r=>r.json())
+  .then(d=>{
+    showToast(d.message || 'Sync started');
+  })
+  .catch(()=>showToast('Request failed', false))
+  .finally(()=>{
+    btn.classList.remove('btn-spin');
+    btn.disabled = false;
+    btn.textContent = icon;
+  });
+}
+
+// ── Restore one user's Sheet from PostgreSQL ──
+function restoreSheet(uid, username, btn){
+  if(!confirm(`Rebuild ${username}'s Google Sheet tab from the database? Anything typed directly into the Sheet will be replaced.`)) return;
+  const icon = btn.textContent;
+  btn.classList.add('btn-spin');
+  btn.disabled = true;
+  fetch(`/admin/restore_sheet/${uid}`, {method:'POST',
+    headers:{'X-CSRFToken': document.cookie.match(/csrf[^=]*=([^;]+)/)?.[1]||''}
+  })
+  .then(r=>r.json())
+  .then(d=>{
+    showToast(d.message || (d.ok ? 'Sheet restored' : 'Restore failed'), d.ok);
+  })
+  .catch(()=>showToast('Request failed', false))
+  .finally(()=>{
+    btn.classList.remove('btn-spin');
+    btn.disabled = false;
+    btn.textContent = icon;
+  });
+}
+
+// ── Reset LC import flag ──
+function resetLC(uid, btn){
+  if(!confirm('Reset LC import flag for this user?')) return;
+  fetch(`/admin/reset_lc/${uid}`, {method:'POST',
+    headers:{'X-CSRFToken': document.cookie.match(/csrf[^=]*=([^;]+)/)?.[1]||''}
+  })
+  .then(r=>r.json())
+  .then(d=>{
+    showToast('LC import flag reset');
+    btn.style.display='none';
+  })
+  .catch(()=>showToast('Failed', false));
+}
+
+// ── Backup list ──
+fetch('/admin/backups_list').then(r=>r.json()).then(files=>{
+  const el = document.getElementById('backupList');
+  if(!files.length){el.innerHTML='<span class="muted small">No backups yet.</span>';return;}
+  el.innerHTML = files.map(f=>
+    `<div class="backup-item">
+       <span class="mono small">${f}</span>
+       <button class="btn-sm btn-promote" onclick="document.getElementById('restoreInput').value='${f}'">Use</button>
+     </div>`
+  ).join('');
+}).catch(()=>{});
+</script>
+{% endblock %}

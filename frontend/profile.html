@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title id="pageTitle">Profile – DSA Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+<script src="config.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="noise"></div>
+<div class="grid-bg"></div>
+<div id="navContainer"></div>
+<div class="flash-container" id="flashContainer"></div>
+
+<main class="main-content">
+<div class="profile-wrap" id="profileWrap">Loading…</div>
+</main>
+
+<script src="assets/js/main.js"></script>
+<script src="assets/js/app.js"></script>
+<script>
+const platformCls = p => (p || "").toLowerCase().replace("codeforces", "cf").replace("leetcode", "lc").replace("atcoder", "ac");
+
+async function toggleFollow(uid) {
+  const btn = document.getElementById("followBtn");
+  const d = await apiPostJSON(`/follow/${uid}`, {});
+  if (d.success) {
+    btn.textContent = d.action === "followed" ? "✓ Following" : "+ Follow";
+    btn.className = "btn " + (d.action === "followed" ? "btn-following" : "btn-primary");
+  }
+}
+
+(async () => {
+  const me = await apiGet("/api/auth/me");
+  // Public profiles are viewable while logged out too (matches the
+  // original public_profile() route, which has no @login_required).
+  const username = qs("username");
+  if (!username) { window.location.href = "index.html"; return; }
+  if (me.authenticated) renderNav(me);
+
+  const res = await apiGet(`/user/${encodeURIComponent(username)}`);
+  if (res.__status === 404 || res.__status === 403) {
+    window.location.href = `error.html?code=${res.__status}&msg=${res.__status === 404 ? "Page not found." : "Access denied."}`;
+    return;
+  }
+  const { profile_user, data, subs, follower_count, following_count, is_following, viewer_is_self } = res;
+  document.getElementById("pageTitle").textContent = `${profile_user.username} – DSA Tracker`;
+
+  const stats = [
+    ["🏆", data.total, "Total", "total"],
+    ["🔵", data.cf, "Codeforces", "cf"],
+    ["🟡", data.lc, "LeetCode", "lc"],
+    ["🟢", data.ac, "AtCoder", "ac"],
+    ["🔥", data.streak, "Streak", "streak"],
+  ];
+
+  document.getElementById("profileWrap").innerHTML = `
+    <div class="profile-header-card">
+      <div class="profile-avatar">${(profile_user.username[0] || "?").toUpperCase()}</div>
+      <div class="profile-info">
+        <h2>${profile_user.username}</h2>
+        ${profile_user.bio ? `<p class="profile-bio">${profile_user.bio}</p>` : ""}
+        <div class="profile-handles">
+          ${profile_user.cf_handle ? `<a href="https://codeforces.com/profile/${profile_user.cf_handle}" target="_blank" class="handle-chip cf-chip">CF: ${profile_user.cf_handle}</a>` : ""}
+          ${profile_user.lc_handle ? `<a href="https://leetcode.com/${profile_user.lc_handle}" target="_blank" class="handle-chip lc-chip">LC: ${profile_user.lc_handle}</a>` : ""}
+          ${profile_user.ac_handle ? `<a href="https://atcoder.jp/users/${profile_user.ac_handle}" target="_blank" class="handle-chip ac-chip">AC: ${profile_user.ac_handle}</a>` : ""}
+        </div>
+        <div class="profile-meta">
+          <span>${follower_count} followers</span><span>·</span>
+          <span>${following_count} following</span>
+          ${profile_user.last_sync ? `<span>· Synced <span class="mono">${profile_user.last_sync}</span></span>` : ""}
+        </div>
+      </div>
+      <div class="profile-actions">
+        ${viewer_is_self ? `<a href="settings.html" class="btn btn-outline">Edit Profile</a>` :
+          (me.authenticated ? `<button id="followBtn" class="btn ${is_following ? "btn-following" : "btn-primary"}" onclick="toggleFollow(${profile_user.id})">${is_following ? "✓ Following" : "+ Follow"}</button>` : "")}
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      ${stats.map(([icon, val, lbl, cls]) => `
+        <div class="stat-card stat-${cls}"><div class="stat-icon">${icon}</div>
+          <div class="stat-body"><div class="stat-num">${val}</div><div class="stat-label">${lbl}</div></div></div>`).join("")}
+    </div>
+
+    ${(data.chart_labels && data.chart_labels.length) ? `
+    <div class="chart-card">
+      <div class="card-header"><h3>Activity</h3></div>
+      <div class="chart-wrap"><canvas id="pChart"></canvas></div>
+    </div>` : ""}
+
+    <div class="table-card">
+      <div class="card-header"><h3>Recent Problems</h3></div>
+      ${(subs && subs.length) ? `
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>Platform</th><th>Problem</th><th>Date</th></tr></thead>
+        <tbody>${subs.map((s, i) => `
+          <tr><td class="row-num mono">${i + 1}</td>
+            <td><span class="platform-badge platform-${platformCls(s.platform)}">${s.platform}</span></td>
+            <td class="problem-name">${s.problem_url ? `<a href="${s.problem_url}" target="_blank" class="problem-link">${s.problem_name} ↗</a>` : s.problem_name}</td>
+            <td class="mono">${s.solved_date}</td></tr>`).join("")}</tbody>
+      </table></div>` : `<div class="empty-state">No submissions yet.</div>`}
+    </div>`;
+
+  if (data.chart_labels && data.chart_labels.length && document.getElementById("pChart")) {
+    new Chart(document.getElementById("pChart"), {
+      type: "bar",
+      data: { labels: data.chart_labels, datasets: [{ label: "Solved", data: data.chart_data, backgroundColor: "rgba(251,191,36,.65)", borderColor: "#fbbf24", borderWidth: 1, borderRadius: 3 }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+        scales: { x: { ticks: { color: "#555", font: { size: 9 } }, grid: { color: "rgba(255,255,255,.04)" } },
+                  y: { ticks: { color: "#555", font: { size: 9 } }, grid: { color: "rgba(255,255,255,.04)" }, beginAtZero: true } } }
+    });
+  }
+})();
+</script>
+</body>
+</html>

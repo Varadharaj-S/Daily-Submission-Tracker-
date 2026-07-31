@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pending Verification</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+<script src="config.js"></script>
+</head>
+<body>
+<div class="noise"></div>
+<div class="grid-bg"></div>
+<div id="navContainer"></div>
+<div class="flash-container" id="flashContainer"></div>
+
+<main class="main-content">
+<div class="center-page">
+  <div class="pending-card">
+    <div class="pending-icon">⏳</div>
+    <h2>Account Pending</h2>
+    <p>Your account is waiting for admin verification. Once approved, you can log in and your Google Sheet will be automatically created and shared with your email.</p>
+    <a href="login.html" class="btn btn-outline">← Back to Login</a>
+  </div>
+</div>
+</main>
+
+<script src="assets/js/main.js"></script>
+<script src="assets/js/app.js"></script>
+<script>showQueuedMessages();</script>
+</body>
+</html>

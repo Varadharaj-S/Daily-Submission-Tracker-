@@ -1,0 +1,315 @@
+{% extends "base.html" %}
+{% block title %}{{ page_title or "Daily Tracker" }} – DSA Tracker{% endblock %}
+{% block head %}
+<style>
+  .tracker-wrap{display:flex;flex-direction:column;gap:1rem}
+  .tracker-hero{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:flex-start}
+  .tracker-hero h2{margin:0;font-size:1.5rem}
+  .tracker-hero p{margin:.35rem 0 0;color:var(--muted)}
+  .tracker-actions{display:flex;gap:.5rem;flex-wrap:wrap}
+  .grid-4{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:1rem}
+  .mini-card{background:var(--bg2);border:1px solid var(--border);border-radius:18px;padding:1rem;box-shadow:var(--shadow)}
+  .mini-card .k{font-size:.75rem;text-transform:uppercase;color:var(--muted);letter-spacing:.08em}
+  .mini-card .v{font-size:1.6rem;font-weight:800;margin-top:.35rem}
+  .section-card{background:var(--bg2);border:1px solid var(--border);border-radius:18px;padding:1rem;box-shadow:var(--shadow)}
+  .section-card h3{margin:0 0 .9rem;font-size:1rem}
+  .table-wrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:.55rem .7rem;border-bottom:1px solid var(--border2);text-align:left;vertical-align:top}
+  th{font-size:.78rem;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+  td{font-size:.88rem}
+  .chip{display:inline-flex;align-items:center;padding:.18rem .55rem;border-radius:999px;background:var(--bg3);border:1px solid var(--border2);margin:.1rem .2rem .1rem 0;font-size:.78rem}
+  .chip.good{background:rgba(16,185,129,.12);color:#34d399}
+  .chip.bad{background:rgba(239,68,68,.12);color:#f87171}
+  .row-stack{display:flex;flex-wrap:wrap;gap:.25rem}
+  .sheet-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem}
+  .sheet-card{background:var(--bg2);border:1px solid var(--border);border-radius:18px;padding:1rem}
+  .sheet-card h4{margin:0 0 .35rem}
+  .sheet-card p{margin:0;color:var(--muted);font-size:.85rem;line-height:1.5}
+  .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.75rem}
+  .form-grid input,.form-grid select,.form-grid textarea{width:100%;background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:.65rem .8rem;border-radius:12px}
+  .form-grid textarea{min-height:88px;resize:vertical}
+  .form-actions{margin-top:.75rem;display:flex;gap:.5rem;flex-wrap:wrap}
+  .muted{color:var(--muted)}
+  .problems-list{display:flex;flex-wrap:wrap;gap:.35rem}
+  .problem-item{padding:.18rem .5rem;border-radius:8px;background:rgba(255,255,255,.04);border:1px solid var(--border2);font-size:.76rem}
+</style>
+{% endblock %}
+{% block content %}
+<div class="tracker-wrap">
+
+  <div class="tracker-hero">
+    <div>
+      <h2>{{ page_title or "Daily Tracker" }}</h2>
+      {% if is_admin %}
+      <p>Master sheet with access to all student tracker data. Students cannot view each other’s sheets.</p>
+      {% else %}
+      <p>Private sheet for <strong>{{ view_username }}</strong>. Only this student and admin can open it.</p>
+      {% endif %}
+    </div>
+    <div class="tracker-actions">
+      {% if is_admin %}
+      <form method="post" action="{{ url_for('refresh_tracker') }}">
+        <button class="btn btn-outline" type="submit">↻ Refresh Auto Sheets</button>
+      </form>
+      {% endif %}
+      {% if not is_admin %}
+      <a class="btn btn-outline" href="{{ url_for('my_sheet') }}">My Sheet</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if is_admin %}
+  <div class="grid-4">
+    {% for key, label in [('students','Total Students'), ('active_today','Active Today'), ('total_solved','Problems Solved'), ('sheets','Sheets')] %}
+    <div class="mini-card">
+      <div class="k">{{ label }}</div>
+      <div class="v">{{ summary_cards.get(key, 0) }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  {# Student view: today's progress tracker card #}
+  {% set today_solved = summary_cards.get('today_solved', 0) %}
+  {% set today_target = summary_cards.get('today_target', 10) %}
+  {% set today_pct = [(today_solved / today_target * 100)|int, 100]|min if today_target > 0 else 0 %}
+  {% set status_color = '#22c55e' if today_pct >= 100 else ('#f59e0b' if today_pct > 0 else '#ef4444') %}
+  {% set status_label = '🟢 Completed' if today_pct >= 100 else ('🟡 In Progress' if today_pct > 0 else '🔴 Not Started') %}
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem;margin-bottom:1.5rem">
+    <div class="mini-card" style="padding:1.25rem">
+      <div class="k">🔥 Today's Progress</div>
+      <div style="font-size:1.4rem;font-weight:800;margin:.4rem 0">
+        {{ today_solved }} / {{ today_target }}
+        <span style="font-size:.85rem;font-weight:500;color:var(--muted)">problems</span>
+      </div>
+      <div style="background:var(--border);border-radius:8px;height:10px;overflow:hidden;margin:.5rem 0">
+        <div style="width:{{ today_pct }}%;height:100%;background:{{ status_color }};border-radius:8px;transition:width .3s"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:.3rem">
+        <span style="font-size:.8rem;color:{{ status_color }}">{{ status_label }}</span>
+        {% if summary_cards.get('today_remaining', 0) > 0 %}
+        <span style="font-size:.8rem;color:var(--muted)">{{ summary_cards.get('today_remaining') }} remaining</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="mini-card">
+      <div class="k">📊 Total Solved</div>
+      <div class="v">{{ summary_cards.get('total_solved', 0) }}</div>
+    </div>
+    <div class="mini-card">
+      <div class="k">🔥 Current Streak</div>
+      <div class="v">{{ summary_cards.get('current_streak', 0) }} <span style="font-size:1rem;font-weight:500">days</span></div>
+    </div>
+    {% if summary_cards.get('last_problem') %}
+    <div class="mini-card" style="grid-column:span 1">
+      <div class="k">✅ Last Solved</div>
+      <div style="font-size:.95rem;font-weight:700;margin-top:.35rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ summary_cards.get('last_problem') }}">
+        {{ summary_cards.get('last_problem')|truncate(32) }}
+      </div>
+      <div style="font-size:.75rem;color:var(--muted);margin-top:.2rem">{{ summary_cards.get('last_solved_date','') }}</div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if is_admin %}
+  <div class="section-card">
+    <h3>➕ Create New Sheet</h3>
+    <form method="post" action="{{ url_for('create_tracker_sheet') }}">
+      <div class="form-grid">
+        <div>
+          <label class="muted">Sheet Name</label>
+          <input name="name" placeholder="Contest Attendance" required>
+        </div>
+        <div>
+          <label class="muted">Sheet Type</label>
+          <select name="sheet_type">
+            <option value="daily_problems">Daily Problems</option>
+            <option value="weekly_assignment">Weekly Assignment</option>
+            <option value="contest_attendance">Contest Attendance</option>
+            <option value="monthly_goal">Monthly Goal</option>
+            <option value="placement_eligibility">Placement Eligibility</option>
+            <option value="topic_verification">Topic Verification</option>
+            <option value="coding_attendance">Coding Attendance</option>
+            <option value="custom">Custom Sheets</option>
+          </select>
+        </div>
+        <div>
+          <label class="muted">Target Value</label>
+          <input name="target_value" type="number" value="0" min="0">
+        </div>
+        <div>
+          <label class="muted">Target Topic / Hard Count</label>
+          <input name="target_topic" placeholder="Graphs / 50">
+        </div>
+        <div>
+          <label class="muted">Visibility</label>
+          <select name="visibility">
+            <option value="private">Private</option>
+            <option value="department">Department</option>
+            <option value="public">Public</option>
+          </select>
+        </div>
+        <div style="grid-column:1/-1">
+          <label class="muted">Description</label>
+          <textarea name="description" placeholder="Short description about the sheet"></textarea>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary" type="submit">Create Sheet</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="section-card">
+    <h3>📝 Manual Sheet Result</h3>
+    <form method="post" action="{{ url_for('create_tracker_result') }}">
+      <div class="form-grid">
+        <div>
+          <label class="muted">Sheet</label>
+          <select name="sheet_id">
+            {% for s in sheets %}
+            <option value="{{ s.id }}">{{ s.name }} ({{ s.sheet_type }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="muted">Username</label>
+          <input name="username" placeholder="Varun" required>
+        </div>
+        <div>
+          <label class="muted">Status</label>
+          <input name="status" placeholder="YES / NO / Present / Absent" required>
+        </div>
+        <div>
+          <label class="muted">Solved Count</label>
+          <input name="solved_count" type="number" value="0" min="0">
+        </div>
+        <div style="grid-column:1/-1">
+          <label class="muted">Remarks</label>
+          <textarea name="remarks" placeholder="Any note or verification reason"></textarea>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary" type="submit">Save Result</button>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
+  <div class="section-card">
+    <h3>📂 Sheets Overview</h3>
+    <div class="sheet-grid">
+      {% for s in sheets %}
+      <div class="sheet-card">
+        <h4>{{ s.name }}</h4>
+        <div class="row-stack">
+          <span class="chip">{{ s.sheet_type }}</span>
+          {% if s.target_value %}<span class="chip">Target: {{ s.target_value }}</span>{% endif %}
+          {% if s.target_topic %}<span class="chip">Topic: {{ s.target_topic }}</span>{% endif %}
+        </div>
+        <p>{{ s.description or "No description" }}</p>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="section-card">
+    <h3>📊 Daily Problems</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            {% if is_admin %}<th>Username</th>{% endif %}
+            <th>Solved</th>
+            <th>Easy</th>
+            <th>Medium</th>
+            <th>Hard</th>
+            <th>Problems</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in daily_rows %}
+          <tr>
+            <td class="mono">{{ r.date }}</td>
+            {% if is_admin %}<td><strong>{{ r.username }}</strong></td>{% endif %}
+            <td><span class="chip good">{{ r.solved_count }}</span></td>
+            <td>{{ r.easy }}</td>
+            <td>{{ r.medium }}</td>
+            <td>{{ r.hard }}</td>
+            <td>
+              <div class="problems-list">
+                {% for p in r.problems %}
+                  <span class="problem-item">
+                    {% if p.url %}<a href="{{ p.url }}" target="_blank">{{ p.name }}</a>{% else %}{{ p.name }}{% endif %}
+                    {% if p.difficulty %} · {{ p.difficulty }}{% endif %}
+                  </span>
+                {% endfor %}
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+          {% if not daily_rows %}
+          <tr><td colspan="7" class="muted">No problem logs yet.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section-card">
+    <h3>✅ Verification Results</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Sheet</th>
+            <th>Student</th>
+            <th>Status</th>
+            <th>Solved Count</th>
+            <th>Remarks</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in results %}
+          <tr>
+            <td>{{ r.sheet_name }}</td>
+            <td>{{ r.username }}</td>
+            <td>
+              {% if r.status in ['YES', 'Present'] %}
+                <span class="chip good">{{ r.status }}</span>
+              {% else %}
+                <span class="chip bad">{{ r.status }}</span>
+              {% endif %}
+            </td>
+            <td>{{ r.solved_count }}</td>
+            <td>{{ r.remarks or "-" }}</td>
+            <td class="mono">{{ r.updated_at or "-" }}</td>
+          </tr>
+          {% endfor %}
+          {% if not results %}
+          <tr><td colspan="6" class="muted">No verification results yet.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% if is_admin and users %}
+  <div class="section-card">
+    <h3>👨‍🎓 Student Sheets</h3>
+    <div class="sheet-grid">
+      {% for u in users %}
+      <div class="sheet-card">
+        <h4><a href="{{ url_for('student_sheet', username=u.username) }}">{{ u.username }}</a></h4>
+        <p>Open the private sheet for this student.</p>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

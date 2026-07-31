@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}DSA Tracker{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+{% block head %}{% endblock %}
+</head>
+<body>
+<div class="noise"></div>
+<div class="grid-bg"></div>
+
+{% if current_user.is_authenticated %}
+<nav class="navbar">
+  <a href="{{ url_for('index') }}" class="nav-brand">⚡ DSA<span>Tracker</span></a>
+  <div class="nav-links" id="navLinks">
+    {% if current_user.is_admin %}
+      <a href="{{ url_for('admin_dashboard') }}" class="nav-link {% if request.endpoint=='admin_dashboard' %}active{% endif %}">👑 Admin</a>
+      <a href="{{ url_for('mentor') }}"          class="nav-link {% if request.endpoint=='mentor' %}active{% endif %}">🎓 Mentor</a>
+      <a href="{{ url_for('student_contest') }}" class="nav-link {% if request.endpoint in ['student_contest','contest_create','contest_history'] %}active{% endif %}">⭐ Student Contest</a>
+      <a href="{{ url_for('admin_students') }}" class="nav-link {% if request.endpoint in ['admin_students'] %}active{% endif %}">🧾 Students</a>
+    {% else %}
+      <a href="{{ url_for('dashboard') }}"    class="nav-link {% if request.endpoint=='dashboard' %}active{% endif %}">Dashboard</a>
+      <a href="{{ url_for('problems') }}"     class="nav-link {% if request.endpoint=='problems' %}active{% endif %}">Problems</a>
+      <a href="{{ url_for('weekly_report') }}" class="nav-link {% if request.endpoint=='weekly_report' %}active{% endif %}">📊 Report</a>
+      <a href="{{ url_for('daily_tracker') }}" class="nav-link {% if request.endpoint in ['daily_tracker', 'student_sheet', 'my_sheet'] %}active{% endif %}">🗂 Daily Tracker</a>
+      <a href="{{ url_for('leaderboard') }}"  class="nav-link {% if request.endpoint=='leaderboard' %}active{% endif %}">Leaderboard</a>
+      <a href="{{ url_for('friends') }}"      class="nav-link {% if request.endpoint=='friends' %}active{% endif %}">Friends</a>
+    {% endif %}
+    <div class="nav-divider"></div>
+    {% if not current_user.is_admin %}
+    <a href="{{ url_for('public_profile', username=current_user.username) }}" class="nav-link">
+      <span class="nav-avatar">{{ current_user.username[0]|upper }}</span>
+    </a>
+    {% endif %}
+    <a href="{{ url_for('settings') }}" class="nav-link {% if request.endpoint=='settings' %}active{% endif %}">Settings</a>
+    <a href="{{ url_for('logout') }}" class="nav-link nav-logout">Logout</a>
+  </div>
+  <button class="nav-toggle" onclick="document.getElementById('navLinks').classList.toggle('open')">☰</button>
+</nav>
+{% endif %}
+
+<div class="flash-container" id="flashContainer">
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="toast toast-{{ cat }}">
+    <span class="toast-icon">{{ '✓' if cat=='success' else ('⚠' if cat=='warning' else '✕') }}</span>
+    <span class="toast-msg">{{ msg }}</span>
+    <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+  </div>
+  {% endfor %}
+{% endwith %}
+</div>
+
+<main class="main-content">{% block content %}{% endblock %}</main>
+
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

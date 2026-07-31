@@ -1,0 +1,75 @@
+################################################################################
+# render.yaml — DSA Tracker deployment config
+#
+# Deploy steps:
+#   1. Push this repo to GitHub.
+#   2. Go to dashboard.render.com → New → Blueprint → connect your repo.
+#   3. Render reads this file and creates the web service + cron job + DB.
+#   4. Set the environment variables marked (sync manually in Render dashboard).
+################################################################################
+
+services:
+
+  # ── Web Service (Flask app) ─────────────────────────────────────────────────
+  - type: web
+    name: dsa-tracker
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 2 --bind 0.0.0.0:$PORT --timeout 120
+    plan: free            # change to "starter" for always-on
+    autoDeploy: true      # redeploy on every git push
+
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true            # Render auto-generates a secure random value
+
+      - key: DATABASE_URL
+        fromDatabase:
+          name: dsa-tracker-db
+          property: connectionString   # injected automatically from the DB below
+
+      - key: GOOGLE_SERVICE_JSON
+        sync: false                    # paste the full JSON string in Render dashboard
+
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+
+      - key: SMTP_PORT
+        value: "587"
+
+      - key: SMTP_USER
+        sync: false                    # your Gmail address
+
+      - key: SMTP_PASS
+        sync: false                    # Gmail App Password (not your real password)
+
+      - key: FROM_EMAIL
+        sync: false                    # sender address, usually same as SMTP_USER
+
+      - key: APP_URL
+        sync: false                    # e.g. https://dsa-tracker.onrender.com
+
+  # ── Cron Job (daily sync) ───────────────────────────────────────────────────
+  - type: cron
+    name: dsa-tracker-daily-sync
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    schedule: "0 2 * * *"            # runs at 02:00 UTC every day
+    startCommand: python scheduler.py
+    plan: free
+
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: dsa-tracker-db
+          property: connectionString
+
+      - key: GOOGLE_SERVICE_JSON
+        sync: false
+
+# ── PostgreSQL Database ─────────────────────────────────────────────────────
+databases:
+  - name: dsa-tracker-db
+    plan: free                        # 1 GB free tier on Render
+    databaseName: dsa_tracker
+    user: dsa_user

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Friends – DSA Tracker{% endblock %}
+{% block content %}
+<div class="page-header"><div><h2>Friends</h2><p class="page-sub">People you follow and your followers</p></div></div>
+<div class="friends-grid">
+  <div class="friends-section">
+    <div class="section-head"><h3>Following <span class="count-pill">{{ following|length }}</span></h3></div>
+    <div class="friends-list">
+      {% for u in following %}
+      <div class="friend-card">
+        <div class="friend-avatar">{{ u.username[0]|upper }}</div>
+        <div class="friend-info">
+          <a href="{{ url_for('public_profile', username=u.username) }}" class="friend-name">{{ u.username }}</a>
+          <div class="friend-handles">
+            {% if u.cf_handle %}<span class="handle-mini cf-mini">CF: {{ u.cf_handle }}</span>{% endif %}
+            {% if u.lc_handle %}<span class="handle-mini lc-mini">LC: {{ u.lc_handle }}</span>{% endif %}
+          </div>
+          <p class="friend-stat">🏆 {{ u.prob_count }} solved</p>
+        </div>
+        <a href="{{ url_for('public_profile', username=u.username) }}" class="btn btn-outline btn-sm">View →</a>
+      </div>
+      {% else %}<div class="empty-state" style="padding:2rem">Not following anyone. Check the <a href="{{ url_for('leaderboard') }}">Leaderboard</a>!</div>{% endfor %}
+    </div>
+  </div>
+  <div class="friends-section">
+    <div class="section-head"><h3>Followers <span class="count-pill">{{ followers|length }}</span></h3></div>
+    <div class="friends-list">
+      {% for u in followers %}
+      <div class="friend-card">
+        <div class="friend-avatar">{{ u.username[0]|upper }}</div>
+        <div class="friend-info">
+          <a href="{{ url_for('public_profile', username=u.username) }}" class="friend-name">{{ u.username }}</a>
+          <p class="friend-stat">🏆 {{ u.prob_count }} solved</p>
+        </div>
+        <a href="{{ url_for('public_profile', username=u.username) }}" class="btn btn-outline btn-sm">View →</a>
+      </div>
+      {% else %}<div class="empty-state" style="padding:2rem">No followers yet.</div>{% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

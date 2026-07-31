@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Login History{% endblock %}
+{% block content %}
+<div class="page-header"><div><h2>🔐 Login History</h2><p class="page-sub">Last 30 login attempts</p></div>
+  <a href="{{ url_for('settings') }}" class="btn btn-outline">← Settings</a>
+</div>
+<div class="table-card">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Time</th><th>IP Address</th><th>Device</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for h in history %}
+        <tr>
+          <td class="mono small">{{ h.created_at[:16] }}</td>
+          <td class="mono">{{ h.ip }}</td>
+          <td class="muted small">{{ (h.user_agent or '')[:70] }}{% if (h.user_agent or '')|length > 70 %}…{% endif %}</td>
+          <td>{% if h.success %}<span class="status-badge status-active">✓ Success</span>
+              {% else %}<span class="status-badge status-rejected">✕ Failed</span>{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" style="padding:2rem;text-align:center;color:var(--dim)">No history.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

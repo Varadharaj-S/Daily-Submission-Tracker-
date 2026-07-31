@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login History</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+<script src="config.js"></script>
+</head>
+<body>
+<div class="noise"></div>
+<div class="grid-bg"></div>
+<div id="navContainer"></div>
+<div class="flash-container" id="flashContainer"></div>
+
+<main class="main-content">
+<div class="page-header"><div><h2>🔐 Login History</h2><p class="page-sub">Last 30 login attempts</p></div>
+  <a href="settings.html" class="btn btn-outline">← Settings</a>
+</div>
+<div class="table-card">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Time</th><th>IP Address</th><th>Device</th><th>Status</th></tr></thead>
+      <tbody id="historyBody"></tbody>
+    </table>
+  </div>
+</div>
+</main>
+
+<script src="assets/js/main.js"></script>
+<script src="assets/js/app.js"></script>
+<script>
+(async () => {
+  const me = await requireAuth({ verified: true });
+  if (!me) return;
+  const { history } = await apiGet("/login_history");
+  const body = document.getElementById("historyBody");
+  if (!history || !history.length) {
+    body.innerHTML = `<tr><td colspan="4" style="padding:2rem;text-align:center;color:var(--dim)">No history.</td></tr>`;
+    return;
+  }
+  body.innerHTML = history.map(h => {
+    const ua = (h.user_agent || "");
+    return `<tr>
+      <td class="mono small">${(h.created_at || "").slice(0, 16)}</td>
+      <td class="mono">${h.ip}</td>
+      <td class="muted small">${ua.slice(0, 70)}${ua.length > 70 ? "…" : ""}</td>
+      <td>${h.success ? '<span class="status-badge status-active">✓ Success</span>' : '<span class="status-badge status-rejected">✕ Failed</span>'}</td>
+    </tr>`;
+  }).join("");
+})();
+</script>
+</body>
+</html>

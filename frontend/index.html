@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DSA Tracker</title>
+<link rel="stylesheet" href="assets/css/style.css">
+<script src="config.js"></script>
+</head>
+<body>
+<div class="noise"></div>
+<div class="grid-bg"></div>
+<script src="assets/js/app.js"></script>
+<script>
+(async () => {
+  // Same logic as the old index() view: authenticated admin -> admin
+  // dashboard, authenticated unverified/inactive user -> pending,
+  // authenticated normal user -> dashboard, anonymous -> login.
+  const me = await apiGet("/api/auth/me");
+  if (!me.authenticated) {
+    window.location.href = "login.html";
+  } else if (me.is_admin) {
+    window.location.href = "admin.html";
+  } else if (!me.is_verified || me.status !== "active") {
+    window.location.href = "pending.html";
+  } else {
+    window.location.href = "dashboard.html";
+  }
+})();
+</script>
+</body>
+</html>

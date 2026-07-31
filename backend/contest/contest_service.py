@@ -1,0 +1,106 @@
+"""
+contest/contest_service.py — Phase 1 scope: contest CRUD against
+PostgreSQL only. No Google Sheets (contest_sheet.py, Phase 2), no
+platform API calls (contest_api.py / contest_sync.py, Phase 3).
+
+Every function takes plain values in / returns plain dict-like DB rows
+out — routes/contest.py is the only caller and does its own sanitize()
+on form input before it reaches here, matching the pattern the rest of
+the app already uses (routes sanitize, services trust their callers).
+"""
+
+from database.db import get_db
+from contest.contest_utils import compute_status, normalize_contest_code
+
+
+def create_contest(contest_name, contest_code, platform, contest_date,
+                    start_time, end_time, created_by):
+    contest_code = normalize_contest_code(contest_code)
+    with get_db() as db:
+        existing = db.execute(
+            "SELECT id FROM contest_events WHERE contest_code=?", (contest_code,)
+        ).fetchone()
+        if existing:
+            return None, f"Contest code '{contest_code}' already exists."
+
+        db.execute("""
+            INSERT INTO contest_events
+            (contest_name, contest_code, platform, contest_date, start_time, end_time,
+             status, sheet_name, created_by)
+            VALUES (?,?,?,?,?,?,?,?,?)
+        """, (contest_name, contest_code, platform, contest_date, start_time, end_time,
+              compute_status(contest_date, start_time, end_time),
+              "Student_Contest", created_by))
+        db.commit()
+
+        row = db.execute(
+            "SELECT * FROM contest_events WHERE contest_code=?", (contest_code,)
+        ).fetchone()
+    return row, None
+
+
+def list_contests(status=None):
+    """Returns all contests, freshest first, with status recomputed live
+    (not trusted from the stored column — see contest_utils.compute_status)."""
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT * FROM contest_events ORDER BY contest_date DESC, start_time DESC"
+        ).fetchall()
+
+    contests = []
+    for r in rows:
+        d = dict(r)
+        d["status"] = compute_status(d["contest_date"], d["start_time"], d["end_time"])
+        contests.append(d)
+
+    if status:
+        contests = [c for c in contests if c["status"] == status]
+    return contests
+
+
+def get_contest(contest_id):
+    with get_db() as db:
+        row = db.execute("SELECT * FROM contest_events WHERE id=?", (contest_id,)).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["status"] = compute_status(d["contest_date"], d["start_time"], d["end_time"])
+    return d
+
+
+def update_contest(contest_id, contest_name=None, platform=None,
+                    contest_date=None, start_time=None, end_time=None):
+    fields, params = [], []
+    for col, val in [("contest_name", contest_name), ("platform", platform),
+                      ("contest_date", contest_date), ("start_time", start_time),
+                      ("end_time", end_time)]:
+        if val is not None:
+            fields.append(f"{col}=?")
+            params.append(val)
+    if not fields:
+        return False
+    params.append(contest_id)
+    with get_db() as db:
+        db.execute(f"UPDATE contest_events SET {', '.join(fields)} WHERE id=?", params)
+        db.commit()
+    return True
+
+
+def delete_contest(contest_id):
+    with get_db() as db:
+        db.execute("DELETE FROM contest_events WHERE id=?", (contest_id,))
+        db.commit()
+
+
+def sync_status_column(contest_id):
+    """Persist the freshly-computed status onto the stored column, so
+    other tools reading the table directly (e.g. a future Sheet formula
+    or a report query) see an up-to-date value too. Routes call this
+    after create/edit; Phase 3's scheduler calls it as contests transition
+    into 'Running'/'Completed'."""
+    c = get_contest(contest_id)
+    if not c:
+        return
+    with get_db() as db:
+        db.execute("UPDATE contest_events SET status=? WHERE id=?", (c["status"], contest_id))
+        db.commit()

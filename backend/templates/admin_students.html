@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Student Management – DSA Tracker{% endblock %}
+{% block head %}
+<style>
+  .section-card{background:var(--bg2);border:1px solid var(--border);border-radius:18px;padding:1rem;box-shadow:var(--shadow)}
+  .table-wrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:.5rem .6rem;border-bottom:1px solid var(--border2);text-align:left;vertical-align:middle}
+  th{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  td input{width:100%;background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:.4rem .55rem;border-radius:8px;font-size:.85rem;font-family:inherit}
+  tr.missing{background:rgba(251,191,36,.05)}
+  .badge{display:inline-flex;padding:.15rem .5rem;border-radius:999px;font-size:.72rem;background:rgba(251,191,36,.15);color:#fbbf24}
+  .banner{margin-bottom:1rem}
+</style>
+{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h2>🧾 Student Management</h2>
+    <p class="page-sub">Backfill Reg No / Roll No / Branch for existing students — required before the Student_Contest sheet can list them properly.</p>
+  </div>
+  <a href="{{ url_for('student_contest') }}" class="btn btn-outline">← Student Contest</a>
+</div>
+
+{% if missing_count %}
+<div class="info-banner banner">
+  <span>⚠</span>
+  <span>{{ missing_count }} student(s) still missing a Reg No. They'll be skipped when the Student_Contest sheet is generated until filled in.</span>
+</div>
+{% endif %}
+
+<div class="section-card">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Username</th><th>Full Name</th><th>Reg No</th><th>Roll No</th><th>Branch</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr class="{{ 'missing' if not u.reg_no }}">
+          <td>{{ u.username }} {% if not u.reg_no %}<span class="badge">missing</span>{% endif %}</td>
+          <td><input type="text" name="full_name" form="frm-{{ u.id }}" value="{{ u.full_name or '' }}" maxlength="120" placeholder="Full name"></td>
+          <td><input type="text" name="reg_no" form="frm-{{ u.id }}" value="{{ u.reg_no or '' }}" maxlength="40" placeholder="Reg No"></td>
+          <td><input type="text" name="roll_no" form="frm-{{ u.id }}" value="{{ u.roll_no or '' }}" maxlength="40" placeholder="Roll No"></td>
+          <td><input type="text" name="branch" form="frm-{{ u.id }}" value="{{ u.branch or '' }}" maxlength="40" placeholder="Branch"></td>
+          <td><button type="submit" form="frm-{{ u.id }}" class="btn btn-outline btn-sm">Save</button></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% for u in users %}
+<form id="frm-{{ u.id }}" method="post" action="{{ url_for('admin_students_update', uid=u.id) }}"></form>
+{% endfor %}
+{% endblock %}

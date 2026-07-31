@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Problems – DSA Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+<script src="config.js"></script>
+</head>
+<body>
+<div class="noise"></div>
+<div class="grid-bg"></div>
+<div id="navContainer"></div>
+<div class="flash-container" id="flashContainer"></div>
+
+<main class="main-content" id="app">Loading…</main>
+
+<script src="assets/js/main.js"></script>
+<script src="assets/js/app.js"></script>
+<script>
+const platformCls = p => (p || "").toLowerCase().replace("codeforces", "cf").replace("leetcode", "lc").replace("atcoder", "ac");
+
+function buildUrl(overrides) {
+  const cur = { platform: qs("platform") || "all", diff: qs("diff") || "all", q: qs("q") || "", page: qs("page") || "1" };
+  const params = { ...cur, ...overrides };
+  const usp = new URLSearchParams();
+  usp.set("platform", params.platform);
+  usp.set("diff", params.diff);
+  if (params.q) usp.set("q", params.q);
+  if (params.page && params.page !== "1") usp.set("page", params.page);
+  return "problems.html?" + usp.toString();
+}
+
+(async () => {
+  const me = await requireAuth({ verified: true });
+  if (!me) return;
+
+  const platform = qs("platform") || "all";
+  const diff = qs("diff") || "all";
+  const q = qs("q") || "";
+  const page = qs("page") || "1";
+
+  const res = await apiGet(`/problems?platform=${encodeURIComponent(platform)}&diff=${encodeURIComponent(diff)}&q=${encodeURIComponent(q)}&page=${encodeURIComponent(page)}`);
+  const { subs, total, total_pages } = res;
+
+  const platTabs = [["all", "All"], ["Codeforces", "CF"], ["LeetCode", "LC"], ["AtCoder", "AC"]];
+  const diffTabs = ["all", "Easy", "Medium", "Hard"];
+
+  document.getElementById("app").innerHTML = `
+  <div class="page-header">
+    <div><h2>Problem Table</h2><p class="page-sub">${total} problems</p></div>
+    <a href="${BASE_API_URL}/export_csv" class="btn btn-outline">↓ Export CSV</a>
+  </div>
+
+  <form class="filter-bar" id="filterForm">
+    <div class="filter-tabs">
+      ${platTabs.map(([p, lbl]) => {
+        const cls = p === "Codeforces" ? "cf-tab" : p === "LeetCode" ? "lc-tab" : p === "AtCoder" ? "ac-tab" : "";
+        return `<a href="${buildUrl({ platform: p, page: 1 })}" class="filter-tab ${platform === p ? "active " + cls : ""}">${lbl}</a>`;
+      }).join("")}
+    </div>
+    <div class="filter-tabs">
+      ${diffTabs.map(d => `<a href="${buildUrl({ diff: d, page: 1 })}" class="filter-tab ${diff === d ? "active diff-" + d.toLowerCase() + "-tab" : ""}">${d}</a>`).join("")}
+    </div>
+    <div class="search-wrap">
+      <input class="form-input search-input" type="text" id="searchInput" value="${q}" placeholder="Search problems or tags…">
+      <button class="btn btn-outline btn-sm" type="submit">Search</button>
+      ${q ? `<a href="${buildUrl({ q: "", page: 1 })}" class="btn btn-outline btn-sm">✕</a>` : ""}
+    </div>
+  </form>
+
+  <div class="table-card">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Date</th><th>Platform</th><th>Problem</th><th>Difficulty</th><th>Topic</th></tr></thead>
+        <tbody>
+          ${(subs && subs.length) ? subs.map((s, i) => {
+            const first = s.tags ? s.tags.split(";")[0] : "";
+            return `<tr>
+              <td class="row-num mono">${(parseInt(page) - 1) * 50 + i + 1}</td>
+              <td class="mono small">${s.solved_date}</td>
+              <td><span class="platform-badge platform-${platformCls(s.platform)}">${s.platform}</span></td>
+              <td class="problem-name">${s.problem_url ? `<a href="${s.problem_url}" target="_blank" class="problem-link">${s.problem_name} ↗</a>` : s.problem_name}</td>
+              <td><span class="diff-badge diff-${(s.difficulty || "").toLowerCase()}">${s.difficulty || "—"}</span></td>
+              <td>${first ? `<span class="tag-pill">${first}</span>` : `<span class="muted">—</span>`}</td>
+            </tr>`;
+          }).join("") : `<tr><td colspan="6" class="empty-state" style="padding:2.5rem;text-align:center">No problems found.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+    ${total_pages > 1 ? `
+    <div class="pagination">
+      ${page > 1 ? `<a href="${buildUrl({ page: parseInt(page) - 1 })}" class="page-btn">← Prev</a>` : ""}
+      <span class="page-info mono">${page}/${total_pages}</span>
+      ${page < total_pages ? `<a href="${buildUrl({ page: parseInt(page) + 1 })}" class="page-btn">Next →</a>` : ""}
+    </div>` : ""}
+  </div>`;
+
+  document.getElementById("filterForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    window.location.href = buildUrl({ q: document.getElementById("searchInput").value, page: 1 });
+  });
+})();
+</script>
+</body>
+</html>
