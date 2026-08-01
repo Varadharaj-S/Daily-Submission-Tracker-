@@ -104,3 +104,71 @@ def sync_status_column(contest_id):
     with get_db() as db:
         db.execute("UPDATE contest_events SET status=? WHERE id=?", (c["status"], contest_id))
         db.commit()
+
+
+# ── Phase 3 additions: sync support ──────────────────────────────────────────
+
+def get_due_contests():
+    """Returns all Completed-but-unsynced contests (synced=FALSE) that
+    haven't exceeded MAX_SYNC_ATTEMPTS. Called by contest_sync.run_due_contests()."""
+    with get_db() as db:
+        rows = db.execute("""
+            SELECT * FROM contest_events
+            WHERE synced = FALSE
+              AND (sync_attempts IS NULL OR sync_attempts < 5)
+            ORDER BY contest_date ASC, start_time ASC
+        """).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["status"] = compute_status(d["contest_date"], d["start_time"], d["end_time"])
+        result.append(d)
+    # Only return contests that are actually Completed
+    return [c for c in result if c["status"] == "Completed"]
+
+
+def get_contest_problems(contest_id):
+    """Returns list of {problem_id, platform} for a contest.
+    problem_id = the platform's own identifier (e.g. CF problem code,
+    LC title slug, AC problem id) — used by contest_sync to intersect
+    with the submissions table."""
+    with get_db() as db:
+        rows = db.execute("""
+            SELECT problem_id, platform
+            FROM contest_problems
+            WHERE contest_id = ?
+        """, (contest_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def force_resync(contest_id):
+    """Resets synced=FALSE and sync_attempts=0 so the next scheduler tick
+    (or an admin's 'Sync Now') retries the contest from scratch."""
+    with get_db() as db:
+        db.execute("""
+            UPDATE contest_events
+            SET synced=FALSE, sync_attempts=0, last_sync_error=NULL,
+                sync_claimed_at=NULL
+            WHERE id=?
+        """, (contest_id,))
+        db.commit()
+
+
+def add_problem_to_contest(contest_id, problem_id, platform):
+    """Adds a problem to a contest's problem list (contest_problems table).
+    Idempotent — silently ignores duplicates."""
+    with get_db() as db:
+        db.execute("""
+            INSERT INTO contest_problems (contest_id, problem_id, platform)
+            VALUES (?, ?, ?)
+            ON CONFLICT (contest_id, problem_id) DO NOTHING
+        """, (contest_id, problem_id, platform))
+        db.commit()
+
+
+def remove_problem_from_contest(contest_id, problem_id):
+    with get_db() as db:
+        db.execute("""
+            DELETE FROM contest_problems WHERE contest_id=? AND problem_id=?
+        """, (contest_id, problem_id))
+        db.commit()

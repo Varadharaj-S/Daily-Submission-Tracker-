@@ -228,3 +228,71 @@ def refresh_sheet():
         return True, f"Sheet refreshed ({added} new student(s) imported)."
     except Exception as e:
         return False, f"Google Sheet refresh failed: {e}"
+
+
+# ── write_contest_results — called from contest_sync.py after grading ────────
+
+def write_contest_results(contest_code, results_by_user_id):
+    """
+    Writes graded results for one contest into the Student_Contest sheet.
+
+    results_by_user_id: {user_id (int): {"solved": int, "participated": bool, ...}}
+
+    For each student row (matched via the hidden _user_id column):
+      - If participated=True  → writes solved count (integer)
+      - If participated=False → writes ABSENT_MARKER ("ABS")
+
+    After writing all cells, recalculates the summary columns (Total Solved,
+    Contests Attended, Attendance %) in one batch call.
+
+    Returns (ok: bool, message: str). Never raises.
+    """
+    try:
+        sheet = get_or_create_student_contest_sheet()
+        header = _header(sheet)
+
+        # Ensure the contest column exists
+        if contest_code not in header:
+            add_contest_column(sheet, contest_code)
+            header = _header(sheet)  # re-read after insert
+
+        contest_col_idx = _col_index(header, contest_code)  # 1-based
+        uid_col_idx     = _col_index(header, KEY_COLUMN) - 1  # 0-based
+
+        all_values = sheet.get_all_values()
+        data_rows  = all_values[1:]  # skip header
+
+        updates = []  # [(row_number_1based, col_1based, value)]
+        for i, row in enumerate(data_rows):
+            sheet_row = i + 2  # 1-based, +1 for header
+            uid = row[uid_col_idx].strip() if len(row) > uid_col_idx else ""
+            if not uid:
+                continue
+
+            try:
+                uid_int = int(uid)
+            except ValueError:
+                continue
+
+            result = results_by_user_id.get(uid_int)
+            if result is None:
+                # Student not in results (wasn't a participant for this platform)
+                continue
+
+            cell_val = result["solved"] if result.get("participated") else ABSENT_MARKER
+            updates.append((sheet_row, contest_col_idx, cell_val))
+
+        # Batch update: one API call per cell is too slow for 50+ students.
+        # gspread's batch_update / update with a range is the right call here.
+        if updates:
+            cell_list = []
+            for (r, c, v) in updates:
+                cell = gspread.utils.rowcol_to_a1(r, c)
+                cell_list.append({"range": cell, "values": [[v]]})
+            sheet.batch_update(cell_list, value_input_option="USER_ENTERED")
+
+        recalculate_summary(sheet)
+        return True, f"Sheet updated: {len(updates)} student(s) written for '{contest_code}'."
+
+    except Exception as e:
+        return False, f"Sheet write failed for '{contest_code}': {e}"

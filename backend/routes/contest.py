@@ -1,144 +1,61 @@
 """
-routes/contest.py — Phase 1 of the Contest Tracker: the /student_contest
-dashboard, contest create/edit/delete, and /contest/history. No Google
-Sheets integration (Phase 2) and no platform sync (Phase 3) yet — status
-is computed live from date/time (see contest.contest_utils.compute_status),
-not driven by a scheduler, since there isn't one yet.
-
-Access note: the design doc asks for "Admin and Mentor" access, but this
-codebase doesn't actually have a separate mentor role — "Mentor Mode"
-(routes/admin.py's /admin/mentor) is itself an admin-only page. Contest
-routes are gated the same way, behind admin_required, until/unless a real
-mentor role gets added.
+contest/contest_utils.py — small stateless helpers shared across the
+contest module. Phase 1 scope: just status computation and code
+normalization. Platform-specific parsing helpers land here in Phase 3.
 """
 
-from datetime import datetime
-
-from flask import request, jsonify
-from flask_login import current_user
-
-from extensions import app
-from utils.decorators import login_required, admin_required, log_admin
-from utils.security import sanitize
-from contest import contest_service
-from contest import contest_sheet
+import re
+from datetime import datetime, date, time as time_cls
 
 
-@app.route("/student_contest")
-@login_required
-@admin_required
-def student_contest():
-    contests = contest_service.list_contests()
-    counts = {"Upcoming": 0, "Running": 0, "Completed": 0}
-    for c in contests:
-        counts[c["status"]] = counts.get(c["status"], 0) + 1
+def compute_status(contest_date, start_time, end_time, now=None):
+    """
+    Returns 'Upcoming' | 'Running' | 'Completed' given a contest's date and
+    start/end times. Computed fresh on every read rather than trusted from
+    the stored column, the same pattern services/tracker_service.py uses
+    for daily_tracker_sheet_results — status always reflects the current
+    time, never goes stale waiting for a scheduler run (Phase 3).
+    """
+    now = now or datetime.now()
 
-    return jsonify({
-        "contests": contests,
-        "counts": counts,
-        "total_contests": len(contests),
-    })
+    if isinstance(contest_date, str):
+        contest_date = datetime.strptime(contest_date, "%Y-%m-%d").date()
+    if isinstance(start_time, str):
+        start_time = datetime.strptime(start_time, "%H:%M").time()
+    if isinstance(end_time, str):
+        end_time = datetime.strptime(end_time, "%H:%M").time()
 
+    start_dt = datetime.combine(contest_date, start_time)
+    end_dt = datetime.combine(contest_date, end_time)
 
-@app.route("/contest/create", methods=["GET", "POST"])
-@login_required
-@admin_required
-def contest_create():
-    if request.method == "POST":
-        name = sanitize(request.form.get("contest_name", ""), 120)
-        code = sanitize(request.form.get("contest_code", ""), 32)
-        platform = request.form.get("platform", "Codeforces")
-        contest_date = request.form.get("contest_date", "")
-        start_time = request.form.get("start_time", "")
-        end_time = request.form.get("end_time", "")
-
-        if not (name and code and contest_date and start_time and end_time):
-            return jsonify({"success": False, "message": "All fields are required."}), 400
-
-        if platform not in ("Codeforces", "LeetCode", "AtCoder"):
-            return jsonify({"success": False, "message": "Invalid platform."}), 400
-
-        try:
-            datetime.strptime(contest_date, "%Y-%m-%d")
-            datetime.strptime(start_time, "%H:%M")
-            datetime.strptime(end_time, "%H:%M")
-        except ValueError:
-            return jsonify({"success": False, "message": "Invalid date or time format."}), 400
-
-        if end_time <= start_time:
-            return jsonify({"success": False, "message": "End time must be after start time."}), 400
-
-        row, error = contest_service.create_contest(
-            name, code, platform, contest_date, start_time, end_time, current_user.id
-        )
-        if error:
-            return jsonify({"success": False, "message": error}), 400
-
-        log_admin("create_contest", target=code, details=name)
-
-        sheet_ok, sheet_msg = contest_sheet.ensure_sheet_for_contest(dict(row))
-        if sheet_ok:
-            return jsonify({"success": True, "message": f"Contest '{name}' created. {sheet_msg}", "redirect": "/contest_dashboard.html"})
-        else:
-            # Contest exists in Postgres either way — Sheets failure is
-            # surfaced but non-fatal, same pattern as email failures
-            # elsewhere in this app not blocking signup.
-            return jsonify({
-                "success": True,
-                "message": f"Contest '{name}' created, but {sheet_msg} "
-                           f"Use 'Refresh Sheet' on the dashboard once fixed.",
-                "level": "warning",
-                "redirect": "/contest_dashboard.html"
-            })
-
-    return jsonify({"ok": True})
+    if now < start_dt:
+        return "Upcoming"
+    if start_dt <= now <= end_dt:
+        return "Running"
+    return "Completed"
 
 
-@app.route("/contest/edit/<int:cid>", methods=["POST"])
-@login_required
-@admin_required
-def contest_edit(cid):
-    c = contest_service.get_contest(cid)
-    if not c:
-        return jsonify({"success": False, "message": "Contest not found."}), 404
-
-    contest_service.update_contest(
-        cid,
-        contest_name=sanitize(request.form.get("contest_name", ""), 120) or None,
-        platform=request.form.get("platform") or None,
-        contest_date=request.form.get("contest_date") or None,
-        start_time=request.form.get("start_time") or None,
-        end_time=request.form.get("end_time") or None,
-    )
-    contest_service.sync_status_column(cid)
-    log_admin("edit_contest", target=c["contest_code"])
-    return jsonify({"success": True, "message": "Contest updated."})
+def normalize_contest_code(code):
+    """Contest codes are used as Google Sheet column headers (Phase 2) and
+    as a unique key, so keep them short and predictable: alnum + dash/underscore."""
+    code = re.sub(r"[^A-Za-z0-9_-]", "", str(code or "").strip())
+    return code[:32]
 
 
-@app.route("/contest/delete/<int:cid>", methods=["POST"])
-@login_required
-@admin_required
-def contest_delete(cid):
-    c = contest_service.get_contest(cid)
-    if c:
-        contest_service.delete_contest(cid)
-        log_admin("delete_contest", target=c["contest_code"])
-        return jsonify({"success": True, "message": f"Contest '{c['contest_name']}' deleted."})
-    return jsonify({"success": False, "message": "Contest not found."}), 404
+def get_contest_window(contest):
+    """Returns (start_dt, end_dt) as datetime objects for a contest dict.
+    Used by contest_sync.py to query submissions within the contest window."""
+    contest_date = contest["contest_date"]
+    start_time   = contest["start_time"]
+    end_time     = contest["end_time"]
 
+    if isinstance(contest_date, str):
+        contest_date = datetime.strptime(contest_date, "%Y-%m-%d").date()
+    if isinstance(start_time, str):
+        start_time = datetime.strptime(start_time, "%H:%M").time()
+    if isinstance(end_time, str):
+        end_time = datetime.strptime(end_time, "%H:%M").time()
 
-@app.route("/contest/history")
-@login_required
-@admin_required
-def contest_history():
-    contests = contest_service.list_contests(status="Completed")
-    return jsonify({"contests": contests})
-
-
-@app.route("/contest/refresh_sheet", methods=["POST"])
-@login_required
-@admin_required
-def contest_refresh_sheet():
-    ok, msg = contest_sheet.refresh_sheet()
-    log_admin("refresh_contest_sheet", details=msg)
-    return jsonify({"success": ok, "message": msg})
+    start_dt = datetime.combine(contest_date, start_time)
+    end_dt   = datetime.combine(contest_date, end_time)
+    return start_dt, end_dt
