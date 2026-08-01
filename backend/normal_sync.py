@@ -132,6 +132,7 @@ def rebuild_user_sheet_from_db(user_id, username, get_db):
     with get_db() as db:
         subs = db.execute("""
                         SELECT
+                            id,
                             solved_date,
                             problem_name,
                             problem_url,
@@ -141,23 +142,33 @@ def rebuild_user_sheet_from_db(user_id, username, get_db):
                             tags
                         FROM submissions
                         WHERE user_id = ?
-                        ORDER BY
-                            substr(solved_date,7,4) ASC,
-                            substr(solved_date,4,2) ASC,
-                            substr(solved_date,1,2) ASC,
-                            id ASC
                         """, (user_id,)).fetchall()
 
-    rows = []
+    # solved_date isn't uniformly formatted across all rows — some older rows
+    # were written as ISO (YYYY-MM-DD), most as DD-MM-YYYY. Sorting the raw
+    # text (even with a substr trick tuned for one format) misplaces whichever
+    # rows are in the other format. _parse_any_date already knows how to
+    # handle both, so parse in Python and sort on the real date instead.
+    from utils.helpers import _parse_any_date
+
+    parsed = []
     for s in subs:
+        dt = _parse_any_date(s["solved_date"])
+        parsed.append((dt or datetime.min, s["id"], s))
+
+    parsed.sort(key=lambda t: (t[0], t[1]))
+
+    rows = []
+    for dt, _id, s in parsed:
         title = s.get("problem_name") or "Unknown"
         url = s.get("problem_url") or ""
         submission_url = s.get("submission_url") or ""
 
-        # solved_date is already stored as DD-MM-YYYY text — just force it to
-        # display as text in the Sheet (leading apostrophe) instead of letting
-        # Sheets auto-reinterpret/reformat it as a date.
-        date = "'" + s["solved_date"]
+        # Always emit DD-MM-YYYY for the sheet, regardless of how it was
+        # stored in the DB. Leading apostrophe forces Sheets to keep it as
+        # text instead of auto-reformatting/reinterpreting it.
+        date_label = dt.strftime("%d-%m-%Y") if dt != datetime.min else (s["solved_date"] or "")
+        date = "'" + date_label
 
         rows.append([
             date,
