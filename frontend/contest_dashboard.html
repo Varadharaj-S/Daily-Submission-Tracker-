@@ -55,10 +55,15 @@ async function deleteContest(cid, name) {
 }
 
 (async () => {
-  const me = await requireAuth({ verified: true });
+  const me = await requireAuth({ admin: true, verified: true });
   if (!me) return;
 
-  const { contests, counts, total_contests } = await apiGet("/student_contest");
+  const _contestResp = await apiGet("/student_contest");
+  if (!_contestResp || _contestResp.__status === 403) {
+    document.getElementById("app").innerHTML = "<p style=\'color:red;padding:2rem\'>Admin access required.</p>";
+    return;
+  }
+  const { contests = [], counts = {}, total_contests = 0 } = _contestResp;
 
   document.getElementById("app").innerHTML = `
   <div class="contest-wrap">
