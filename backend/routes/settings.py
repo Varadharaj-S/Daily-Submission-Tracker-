@@ -313,6 +313,10 @@ def feedback():
             headers={
                 "Authorization": f"Bearer {resend_api_key.strip()}",
                 "Content-Type": "application/json",
+                # Resend's Cloudflare front blocks requests with no/generic
+                # User-Agent (error code 1010). urllib doesn't send a real
+                # one by default, so we set it explicitly.
+                "User-Agent": "DSATracker/1.0 (+feedback-form)",
             },
             method="POST"
         )
