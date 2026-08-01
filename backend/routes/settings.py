@@ -280,45 +280,37 @@ def feedback():
                 "message": "Feedback is empty"
             })
 
-        # Env var priority (matches Vercel setup):
-        # FROM_EMAIL  = Gmail address used to send  (e.g. dsatracker@gmail.com)
-        # SMTP_PASS   = Gmail App Password for FROM_EMAIL
-        # ADMIN_EMAIL = where feedback lands (your personal inbox)
-        # Fallbacks keep it working even if some vars aren't set yet.
-        sender_email   = os.environ.get("FROM_EMAIL") or os.environ.get("SMTP_USER", "")
-        sender_password = os.environ.get("SMTP_PASS", "")
-        owner_email    = os.environ.get("ADMIN_EMAIL") or os.environ.get("FROM_EMAIL") or sender_email
+        # Uses Resend API (same as email_service.py on Render).
+        # Env vars needed: RESEND_API_KEY, FROM_EMAIL, ADMIN_EMAIL
+        resend_api_key = os.environ.get("RESEND_API_KEY", "")
+        from_email     = os.environ.get("FROM_EMAIL", "onboarding@resend.dev")
+        admin_email    = os.environ.get("ADMIN_EMAIL") or from_email
 
-        if not sender_email or not sender_password:
-            missing = []
-            if not sender_email:   missing.append("FROM_EMAIL")
-            if not sender_password: missing.append("SMTP_PASS")
-            print(f"[Feedback] missing env vars: {missing}")
+        if not resend_api_key:
+            print("[Feedback] missing RESEND_API_KEY")
             return jsonify({"success": False, "message": "Email not configured on server."})
 
-        msg = MIMEText(f"""
-User: {current_user.username}
-Email: {getattr(current_user, 'email', '')}
+        import urllib.request
+        import json as _json
 
-Feedback:
+        payload = _json.dumps({
+            "from": from_email,
+            "to": [admin_email],
+            "subject": "DSA Tracker Feedback",
+            "text": f"User: {current_user.username}\nEmail: {getattr(current_user, 'email', '')}\n\nFeedback:\n\n{feedback_text}"
+        }).encode()
 
-{feedback_text}
-""")
-
-        msg["Subject"] = "DSA Tracker Feedback"
-        msg["From"] = sender_email
-        msg["To"] = owner_email
-
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-
-        server.login(
-            sender_email,
-            sender_password
+        req = urllib.request.Request(
+            "https://api.resend.com/emails",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {resend_api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST"
         )
-
-        server.send_message(msg)
-        server.quit()
+        with urllib.request.urlopen(req) as resp:
+            print("[Feedback] Resend response:", resp.status)
 
         return jsonify({
             "success": True,
