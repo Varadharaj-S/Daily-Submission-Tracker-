@@ -132,7 +132,6 @@ def rebuild_user_sheet_from_db(user_id, username, get_db):
     with get_db() as db:
         subs = db.execute("""
                         SELECT
-                            id,
                             solved_date,
                             problem_name,
                             problem_url,
@@ -142,33 +141,24 @@ def rebuild_user_sheet_from_db(user_id, username, get_db):
                             tags
                         FROM submissions
                         WHERE user_id = ?
+                        ORDER BY solved_date ASC, id ASC
                         """, (user_id,)).fetchall()
 
-    # solved_date isn't uniformly formatted across all rows — some older rows
-    # were written as ISO (YYYY-MM-DD), most as DD-MM-YYYY. Sorting the raw
-    # text (even with a substr trick tuned for one format) misplaces whichever
-    # rows are in the other format. _parse_any_date already knows how to
-    # handle both, so parse in Python and sort on the real date instead.
-    from utils.helpers import _parse_any_date
-
-    parsed = []
-    for s in subs:
-        dt = _parse_any_date(s["solved_date"])
-        parsed.append((dt or datetime.min, s["id"], s))
-
-    parsed.sort(key=lambda t: (t[0], t[1]))
-
     rows = []
-    for dt, _id, s in parsed:
+    for s in subs:
         title = s.get("problem_name") or "Unknown"
         url = s.get("problem_url") or ""
         submission_url = s.get("submission_url") or ""
 
-        # Always emit DD-MM-YYYY for the sheet, regardless of how it was
-        # stored in the DB. Leading apostrophe forces Sheets to keep it as
-        # text instead of auto-reformatting/reinterpreting it.
-        date_label = dt.strftime("%d-%m-%Y") if dt != datetime.min else (s["solved_date"] or "")
-        date = "'" + date_label
+        date = s["solved_date"]
+
+        try:
+            date = "'" + datetime.strptime(
+    s["solved_date"],
+    "%Y-%m-%d"
+).strftime("%d-%m-%Y")
+        except:
+            pass
 
         rows.append([
             date,
@@ -181,111 +171,38 @@ def rebuild_user_sheet_from_db(user_id, username, get_db):
         ])
     
     sheet = get_sheet(username)
+    
+    sheet.batch_clear(["A:G"])
 
-    # Snapshot whatever is currently in the sheet BEFORE clearing anything.
-    # If the write below fails halfway (network hiccup, Google API quota,
-    # a bad row, etc.) we restore this snapshot instead of leaving the
-    # sheet cleared — a rebuild must never be able to make things worse
-    # than before it ran.
-    try:
-        snapshot = sheet.get_all_values()
-    except Exception as e:
-        print(f"⚠️ Could not snapshot '{username}' sheet before rebuild: {e}")
-        snapshot = None
+    sheet.update(
+        "A1:G1",
+        [["DATE","PROGRAM TITLE","LINK","DIFFICULTY","PLATFORM","TOPIC","COUNT"]]
+    )
 
-    try:
-        sheet.batch_clear(["A:G"])
-
-        sheet.update(
-            "A1:G1",
-            [["DATE","PROGRAM TITLE","LINK","DIFFICULTY","PLATFORM","TOPIC","COUNT"]]
-        )
-
-        sheet.format(
-            "A:A",
-            {
-                "numberFormat": {
-                    "type": "TEXT"
-                }
+    sheet.format(
+        "A:A",
+        {
+            "numberFormat": {
+                "type": "TEXT"
             }
-        )
+        }
+    )
 
-        if rows:
-            from collections import Counter
+    if rows:
+        from collections import Counter
 
-            count_map = Counter(r[0] for r in rows)
+        count_map = Counter(r[0] for r in rows)
 
-            for row in rows:
-                row[6] = count_map[row[0]]
-
-            # Write in chunks so one oversized request can't fail the whole
-            # batch on sheets with a lot of history.
-            CHUNK = 500
-            for i in range(0, len(rows), CHUNK):
-                sheet.append_rows(
-                    rows[i:i + CHUNK],
-                    value_input_option="USER_ENTERED"
-                )
-
-            # regroup: merge DATE and COUNT cells for consecutive same-date rows
-            regroup_sheet(sheet)
-
-    except Exception as e:
-        print(f"❌ Rebuild failed mid-write for '{username}': {e}")
-        if snapshot:
-            print(f"↩️  Restoring previous sheet content for '{username}' ({len(snapshot)} rows)")
-            try:
-                sheet.batch_clear(["A:Z"])
-                if snapshot:
-                    sheet.update("A1", snapshot, value_input_option="USER_ENTERED")
-            except Exception as e2:
-                print(f"❌ Restore-after-failure ALSO failed for '{username}': {e2}")
-        raise
-
+        for row in rows:
+            row[6] = count_map[row[0]]
+        sheet.append_rows(
+    rows,
+    value_input_option="USER_ENTERED"
+)
+        # regroup: merge DATE and COUNT cells for consecutive same-date rows
+        regroup_sheet(sheet)
     print(f"🔄 Restored '{username}' sheet from DB — {len(rows)} rows")
     return len(rows)
-
-
-def append_new_rows_to_sheet(username, new_rows):
-    """
-    Non-destructive path used by every normal "Sync Now" call: only APPEND
-    the rows that are new this run, then fix up the COUNT column and the
-    merged-cell grouping. This never clears/wipes the sheet, so a failure
-    here can't collapse existing data — worst case the new rows just don't
-    show up yet, and they're already safe in Postgres for the next sync or
-    an explicit "Restore sheet" to pick up.
-    """
-    sheet = get_sheet(username)
-
-    sheet.append_rows(new_rows, value_input_option="USER_ENTERED")
-
-    # Recompute COUNT (col G) for every date across the sheet without
-    # touching columns A-F — purely additive/overwrite on one column.
-    try:
-        values = sheet.get_all_values()
-        if len(values) > 1:
-            current_date = ""
-            date_col = []
-            for row in values[1:]:
-                if row and row[0].strip():
-                    current_date = row[0].strip()
-                date_col.append(current_date)
-
-            counts = Counter(date_col)
-            count_column = [[counts[d]] for d in date_col]
-            sheet.update(
-                f"G2:G{len(values)}",
-                count_column,
-                value_input_option="USER_ENTERED"
-            )
-
-        regroup_sheet(sheet)
-    except Exception as e:
-        # Rows are already written and safe — only the COUNT/merge
-        # formatting failed, so just log it instead of failing the sync.
-        print(f"⚠️ Count/regroup step failed for '{username}' (rows still saved): {e}")
-
-    return len(new_rows)
 
 
 # ================= HELPERS =================
@@ -724,30 +641,30 @@ def sync_user_data(user, get_db):
     conn.commit()
     conn.close()
 
-    # Write new rows to this user's own tab in the Google Sheet.
-    # This APPENDS only — it never clears the sheet, so a failure here
-    # can't collapse existing rows. Full clear+rewrite is reserved for the
-    # explicit "Restore sheet" admin action (rebuild_user_sheet_from_db).
-    sheet_msg = None
-    sheet_ok = True
-    if new_rows:
-        try:
-            append_new_rows_to_sheet(username, new_rows)
-            print(f"📄 Added {len(new_rows)} rows to tab '{username}'")
-        except Exception as e:
-            sheet_ok = False
-            sheet_msg = f"⚠️ Data saved to database, but sheet update failed: {e}"
-            print("Sheet error:", e)
-    else:
-        print(f"📄 No new rows for '{username}'")
+    # Write new rows to this user's own tab in the Google Sheet
+    try:
+        sheet = get_sheet(username)
+        if new_rows:
+            from collections import Counter
 
-    message = f"{new_count} new problems added"
-    if sheet_msg:
-        message += f" | {sheet_msg}"
+            count_map = Counter(r[0] for r in new_rows)
+
+            for row in new_rows:
+                row[6] = count_map[row[0]]
+
+            rebuild_user_sheet_from_db(
+    user_id,
+    username,
+    get_db
+)
+            print(f"📄 Added {len(new_rows)} rows to tab '{username}'")
+        else:
+            print(f"📄 No new rows for '{username}'")
+    except Exception as e:
+        print("Sheet error:", e)
 
     return {
         "success": True,
-        "sheet_synced": sheet_ok,
-        "message": message,
+        "message": f"{new_count} new problems added",
         "new_count": new_count
     }
