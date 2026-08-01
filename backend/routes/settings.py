@@ -291,7 +291,14 @@ def feedback():
             return jsonify({"success": False, "message": "Email not configured on server."})
 
         import urllib.request
+        import urllib.error
         import json as _json
+
+        # DEBUG: log key/from/admin so we can rule out env var corruption
+        # (trailing \n, stray quotes, wrong slot) without printing the full key.
+        print(f"[Feedback] key_len={len(resend_api_key)} "
+              f"key_repr={resend_api_key[:6]!r}...{resend_api_key[-4:]!r} "
+              f"from={from_email!r} admin={admin_email!r}")
 
         payload = _json.dumps({
             "from": from_email,
@@ -304,13 +311,28 @@ def feedback():
             "https://api.resend.com/emails",
             data=payload,
             headers={
-                "Authorization": f"Bearer {resend_api_key}",
+                "Authorization": f"Bearer {resend_api_key.strip()}",
                 "Content-Type": "application/json",
             },
             method="POST"
         )
-        with urllib.request.urlopen(req) as resp:
-            print("[Feedback] Resend response:", resp.status)
+
+        try:
+            with urllib.request.urlopen(req) as resp:
+                print("[Feedback] Resend response:", resp.status)
+        except urllib.error.HTTPError as he:
+            body = he.read().decode(errors="ignore")
+            print(f"[Feedback] Resend HTTPError {he.code}: {body}")
+            return jsonify({
+                "success": False,
+                "message": f"Resend {he.code}: {body}"
+            })
+        except urllib.error.URLError as ue:
+            print(f"[Feedback] Resend URLError: {ue.reason}")
+            return jsonify({
+                "success": False,
+                "message": f"Could not reach Resend: {ue.reason}"
+            })
 
         return jsonify({
             "success": True,
