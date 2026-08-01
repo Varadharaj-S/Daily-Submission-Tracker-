@@ -1,199 +1,235 @@
 """
-routes/contest.py — Phase 1 of the Contest Tracker: the /student_contest
-dashboard, contest create/edit/delete, and /contest/history. No Google
-Sheets integration (Phase 2) and no platform sync (Phase 3) yet — status
-is computed live from date/time (see contest.contest_utils.compute_status),
-not driven by a scheduler, since there isn't one yet.
+contest/contest_sync.py — grades a Completed contest from stored
+submissions (no live API calls) and writes results to the Google Sheet.
 
-Access note: the design doc asks for "Admin and Mentor" access, but this
-codebase doesn't actually have a separate mentor role — "Mentor Mode"
-(routes/admin.py's /admin/mentor) is itself an admin-only page. Contest
-routes are gated the same way, behind admin_required, until/unless a real
-mentor role gets added.
+How grading works:
+  The daily bot (normal_sync.py) already pulls every accepted submission
+  into the `submissions` table with submitted_at timestamps. Grading a
+  contest = one SQL query: which of this contest's problems (contest_problems)
+  does each student have a submission row for, with submitted_at inside
+  [contest_start, contest_end]?
+
+Entry points:
+  run_due_contests()    — called by cron.py (Vercel cron) every 5 min
+  sync_one_contest(c)   — called by admin 'Sync Now' button in routes/contest.py
 """
 
-from datetime import datetime
+import traceback
 
-from flask import request, jsonify
-from flask_login import current_user
-
-from extensions import app
-from utils.decorators import login_required, admin_required, log_admin
-from utils.security import sanitize
+from database.db import get_db
 from contest import contest_service
 from contest import contest_sheet
+from contest.contest_utils import get_contest_window
+
+MAX_SYNC_ATTEMPTS = 5
+
+PLATFORM_HANDLE_COLUMN = {
+    "Codeforces": "cf_handle",
+    "LeetCode":   "lc_handle",
+    "AtCoder":    "ac_handle",
+}
 
 
-@app.route("/student_contest")
-@login_required
-@admin_required
-def student_contest():
-    contests = contest_service.list_contests()
-    counts = {"Upcoming": 0, "Running": 0, "Completed": 0}
-    for c in contests:
-        counts[c["status"]] = counts.get(c["status"], 0) + 1
+# ── Logging ───────────────────────────────────────────────────────────────────
 
-    return jsonify({
-        "contests": contests,
-        "counts": counts,
-        "total_contests": len(contests),
-    })
+def _log(contest_id, status, retry_count, last_error="", message=""):
+    try:
+        with get_db() as db:
+            db.execute("""
+                INSERT INTO contest_sync_log
+                    (contest_id, status, retry_count, last_error, message, created_at)
+                VALUES (?, ?, ?, ?, ?, NOW())
+            """, (contest_id, status, retry_count, last_error, message))
+            db.commit()
+    except Exception as e:
+        print(f"[ContestSync] log failed: {e}")
 
 
-@app.route("/contest/create", methods=["GET", "POST"])
-@login_required
-@admin_required
-def contest_create():
-    if request.method == "POST":
-        name = sanitize(request.form.get("contest_name", ""), 120)
-        code = sanitize(request.form.get("contest_code", ""), 32)
-        platform = request.form.get("platform", "Codeforces")
-        contest_date = request.form.get("contest_date", "")
-        start_time = request.form.get("start_time", "")
-        end_time = request.form.get("end_time", "")
+# ── Atomic claim (race-safe) ──────────────────────────────────────────────────
 
-        if not (name and code and contest_date and start_time and end_time):
-            return jsonify({"success": False, "message": "All fields are required."}), 400
+def _claim_contest(contest_id):
+    """Atomically marks a contest as 'being synced'.
+    Returns True only if this call won the claim.
+    Claims older than 10 min are treated as abandoned and can be reclaimed."""
+    with get_db() as db:
+        row = db.execute("""
+            UPDATE contest_events
+            SET sync_claimed_at = NOW(), last_attempt_at = NOW()
+            WHERE id = ?
+              AND synced = FALSE
+              AND (sync_claimed_at IS NULL
+                   OR sync_claimed_at < NOW() - INTERVAL '10 minutes')
+            RETURNING id
+        """, (contest_id,)).fetchone()
+        db.commit()
+    return bool(row)
 
-        if platform not in ("Codeforces", "LeetCode", "AtCoder"):
-            return jsonify({"success": False, "message": "Invalid platform."}), 400
 
-        try:
-            datetime.strptime(contest_date, "%Y-%m-%d")
-            datetime.strptime(start_time, "%H:%M")
-            datetime.strptime(end_time, "%H:%M")
-        except ValueError:
-            return jsonify({"success": False, "message": "Invalid date or time format."}), 400
+# ── Participants ──────────────────────────────────────────────────────────────
 
-        if end_time <= start_time:
-            return jsonify({"success": False, "message": "End time must be after start time."}), 400
+def _get_participants(platform):
+    """Active non-admin students with a handle set for this platform."""
+    handle_col = PLATFORM_HANDLE_COLUMN.get(platform)
+    if not handle_col:
+        return []
+    with get_db() as db:
+        rows = db.execute(f"""
+            SELECT id, username, {handle_col} AS handle
+            FROM users
+            WHERE status='active' AND is_admin=FALSE
+              AND {handle_col} IS NOT NULL AND {handle_col} != ''
+        """).fetchall()
+    return [dict(r) for r in rows]
 
-        row, error = contest_service.create_contest(
-            name, code, platform, contest_date, start_time, end_time, current_user.id
+
+# ── Submission lookup ─────────────────────────────────────────────────────────
+
+def _solved_problem_codes(db, user_id, platform, start_dt, end_dt):
+    """Problem IDs this student solved on this platform within the window."""
+    rows = db.execute("""
+        SELECT DISTINCT problem_id
+        FROM submissions
+        WHERE user_id = ?
+          AND platform = ?
+          AND submitted_at IS NOT NULL
+          AND submitted_at BETWEEN ? AND ?
+    """, (user_id, platform, start_dt, end_dt)).fetchall()
+    return {r["problem_id"] for r in rows}
+
+
+# ── Core sync ─────────────────────────────────────────────────────────────────
+
+def sync_one_contest(contest):
+    """
+    Grades one contest and writes results to the sheet.
+    contest: dict from contest_service.get_contest() / get_due_contests().
+    Returns (ok: bool, message: str). Never raises.
+    """
+    contest_id = contest["id"]
+    attempts   = (contest.get("sync_attempts") or 0) + 1
+
+    if not _claim_contest(contest_id):
+        return False, "Could not claim contest (already syncing or already synced)."
+
+    _log(contest_id, "running", attempts, message="Sync started")
+
+    try:
+        problems = contest_service.get_contest_problems(contest_id)
+        problem_codes = {p["problem_id"] for p in problems}
+
+        if not problem_codes:
+            msg = (
+                "No problems configured for this contest — add them on the "
+                "contest page (Problem List), then Sync Now."
+            )
+            with get_db() as db:
+                db.execute("""
+                    UPDATE contest_events
+                    SET sync_attempts=?, last_sync_error=?, sync_claimed_at=NULL
+                    WHERE id=?
+                """, (attempts, msg, contest_id))
+                db.commit()
+            _log(contest_id, "failed", attempts, msg, msg)
+            return False, msg
+
+        start_dt, end_dt = get_contest_window(contest)
+        participants = _get_participants(contest["platform"])
+
+        results_by_user_id = {}
+        with get_db() as db:
+            solved_by_user = {}
+            for p in participants:
+                solved = _solved_problem_codes(
+                    db, p["id"], contest["platform"], start_dt, end_dt
+                )
+                solved_by_user[p["id"]] = (p["username"], solved & problem_codes)
+
+            # Local rank: most solved first, ties broken alphabetically
+            ranked = sorted(
+                [(uid, uname, s) for uid, (uname, s) in solved_by_user.items() if s],
+                key=lambda x: (-len(x[2]), x[1])
+            )
+            rank_by_user = {uid: i + 1 for i, (uid, _, _) in enumerate(ranked)}
+
+            for user_id, (username, solved_set) in solved_by_user.items():
+                solved_count  = len(solved_set)
+                participated  = solved_count > 0
+                rank          = rank_by_user.get(user_id)
+                results_by_user_id[user_id] = {
+                    "solved":       solved_count,
+                    "participated": participated,
+                    "rank":         rank,
+                    "score":        solved_count,
+                }
+
+                db.execute("""
+                    INSERT INTO contest_results
+                        (contest_id, user_id, username, solved, attendance, rank, score, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+                    ON CONFLICT (contest_id, user_id) DO UPDATE SET
+                        solved=EXCLUDED.solved,
+                        attendance=EXCLUDED.attendance,
+                        rank=EXCLUDED.rank,
+                        score=EXCLUDED.score,
+                        updated_at=NOW()
+                """, (contest_id, user_id, username, solved_count, participated, rank, solved_count))
+            db.commit()
+
+        # Write to Google Sheet
+        sheet_ok, sheet_msg = contest_sheet.write_contest_results(
+            contest["contest_code"], results_by_user_id
         )
-        if error:
-            return jsonify({"success": False, "message": error}), 400
 
-        log_admin("create_contest", target=code, details=name)
+        with get_db() as db:
+            db.execute("""
+                UPDATE contest_events
+                SET synced=TRUE, sync_attempts=?, last_sync_error=?, sync_claimed_at=NULL
+                WHERE id=?
+            """, (attempts, "" if sheet_ok else sheet_msg, contest_id))
+            db.commit()
 
-        sheet_ok, sheet_msg = contest_sheet.ensure_sheet_for_contest(dict(row))
-        if sheet_ok:
-            return jsonify({"success": True, "message": f"Contest '{name}' created. {sheet_msg}", "redirect": "/contest_dashboard.html"})
-        else:
-            # Contest exists in Postgres either way — Sheets failure is
-            # surfaced but non-fatal, same pattern as email failures
-            # elsewhere in this app not blocking signup.
-            return jsonify({
-                "success": True,
-                "message": f"Contest '{name}' created, but {sheet_msg} "
-                           f"Use 'Refresh Sheet' on the dashboard once fixed.",
-                "level": "warning",
-                "redirect": "/contest_dashboard.html"
-            })
+        msg = (
+            f"{len(results_by_user_id)} participant(s) graded. {sheet_msg}"
+        )
+        _log(
+            contest_id,
+            "success" if sheet_ok else "failed",
+            attempts,
+            "" if sheet_ok else sheet_msg,
+            msg
+        )
+        return sheet_ok, msg
 
-    return jsonify({"ok": True})
-
-
-@app.route("/contest/edit/<int:cid>", methods=["POST"])
-@login_required
-@admin_required
-def contest_edit(cid):
-    c = contest_service.get_contest(cid)
-    if not c:
-        return jsonify({"success": False, "message": "Contest not found."}), 404
-
-    contest_service.update_contest(
-        cid,
-        contest_name=sanitize(request.form.get("contest_name", ""), 120) or None,
-        platform=request.form.get("platform") or None,
-        contest_date=request.form.get("contest_date") or None,
-        start_time=request.form.get("start_time") or None,
-        end_time=request.form.get("end_time") or None,
-    )
-    contest_service.sync_status_column(cid)
-    log_admin("edit_contest", target=c["contest_code"])
-    return jsonify({"success": True, "message": "Contest updated."})
+    except Exception as e:
+        err      = str(e)
+        give_up  = attempts >= MAX_SYNC_ATTEMPTS
+        with get_db() as db:
+            db.execute("""
+                UPDATE contest_events
+                SET synced=?, sync_attempts=?, last_sync_error=?, sync_claimed_at=NULL
+                WHERE id=?
+            """, (give_up, attempts, err, contest_id))
+            db.commit()
+        _log(contest_id, "failed", attempts, err, traceback.format_exc()[-2000:])
+        note = (
+            " (gave up — use 'Sync Now' to retry manually)"
+            if give_up else
+            " (will retry on next cron tick)"
+        )
+        return False, f"Sync failed: {err}{note}"
 
 
-@app.route("/contest/delete/<int:cid>", methods=["POST"])
-@login_required
-@admin_required
-def contest_delete(cid):
-    c = contest_service.get_contest(cid)
-    if c:
-        contest_service.delete_contest(cid)
-        log_admin("delete_contest", target=c["contest_code"])
-        return jsonify({"success": True, "message": f"Contest '{c['contest_name']}' deleted."})
-    return jsonify({"success": False, "message": "Contest not found."}), 404
+# ── Scheduler entry point ─────────────────────────────────────────────────────
 
-
-@app.route("/contest/history")
-@login_required
-@admin_required
-def contest_history():
-    contests = contest_service.list_contests(status="Completed")
-    return jsonify({"contests": contests})
-
-
-@app.route("/contest/refresh_sheet", methods=["POST"])
-@login_required
-@admin_required
-def contest_refresh_sheet():
-    ok, msg = contest_sheet.refresh_sheet()
-    log_admin("refresh_contest_sheet", details=msg)
-    return jsonify({"success": ok, "message": msg})
-
-
-@app.route("/contest/sync_now/<int:cid>", methods=["POST"])
-@login_required
-@admin_required
-def contest_sync_now(cid):
-    """Admin 'Sync Now' button — immediately grades one contest."""
-    c = contest_service.get_contest(cid)
-    if not c:
-        return jsonify({"success": False, "message": "Contest not found."}), 404
-
-    from contest.contest_sync import sync_one_contest
-    ok, msg = sync_one_contest(c)
-    log_admin("contest_sync_now", target=c["contest_code"], details=msg)
-    return jsonify({"success": ok, "message": msg})
-
-
-@app.route("/contest/force_resync/<int:cid>", methods=["POST"])
-@login_required
-@admin_required
-def contest_force_resync(cid):
-    """Resets sync state so the contest will be retried on the next tick."""
-    c = contest_service.get_contest(cid)
-    if not c:
-        return jsonify({"success": False, "message": "Contest not found."}), 404
-
-    contest_service.force_resync(cid)
-    log_admin("contest_force_resync", target=c["contest_code"])
-    return jsonify({"success": True, "message": f"Contest '{c['contest_code']}' queued for re-sync."})
-
-
-@app.route("/contest/add_problem/<int:cid>", methods=["POST"])
-@login_required
-@admin_required
-def contest_add_problem(cid):
-    """Adds a problem to the contest's problem list for grading."""
-    data       = request.get_json(silent=True) or {}
-    problem_id = sanitize(data.get("problem_id", ""), 120).strip()
-    platform   = data.get("platform", "")
-
-    if not problem_id or not platform:
-        return jsonify({"success": False, "message": "problem_id and platform are required."}), 400
-
-    contest_service.add_problem_to_contest(cid, problem_id, platform)
-    log_admin("contest_add_problem", target=str(cid), details=f"{platform}:{problem_id}")
-    return jsonify({"success": True, "message": f"Problem '{problem_id}' added."})
-
-
-@app.route("/contest/problems/<int:cid>")
-@login_required
-@admin_required
-def contest_get_problems(cid):
-    """Returns the problem list for a contest."""
-    problems = contest_service.get_contest_problems(cid)
-    return jsonify({"problems": problems})
+def run_due_contests():
+    """
+    Called every 5 min by routes/cron.py (Vercel cron) or contest_scheduler.py
+    (Render cron). Finds every Completed+unsynced contest and syncs each one.
+    """
+    contests = contest_service.get_due_contests()
+    results  = []
+    for c in contests:
+        ok, msg = sync_one_contest(c)
+        results.append((c["contest_code"], ok, msg))
+        print(f"[ContestSync] {c['contest_code']}: {'OK' if ok else 'FAIL'} — {msg}")
+    return results
