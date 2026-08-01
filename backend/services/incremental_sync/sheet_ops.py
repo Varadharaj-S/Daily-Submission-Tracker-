@@ -20,7 +20,24 @@ see fetchers.py's module docstring on why those two are intentionally
 different formats for different consumers).
 """
 
+import os
+import sys
 from datetime import datetime
+
+# ── sys.path fix ─────────────────────────────────────────────────────────────
+# This file lives at backend/services/incremental_sync/sheet_ops.py.
+# normal_sync.py lives at backend/normal_sync.py.
+# We need backend/ on sys.path so "from normal_sync import get_sheet" works
+# regardless of the working directory (local, Render, Vercel).
+_BACKEND_ROOT = os.path.dirname(  # backend/
+    os.path.dirname(              # backend/services/
+        os.path.dirname(          # backend/services/incremental_sync/
+            os.path.abspath(__file__)
+        )
+    )
+)
+if _BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, _BACKEND_ROOT)
 
 from normal_sync import get_sheet  # reused as-is; not modified
 
