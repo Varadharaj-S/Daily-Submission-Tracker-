@@ -39,6 +39,21 @@ def create_contest(contest_name, contest_code, platform, contest_date,
     return row, None
 
 
+def _serialize_contest(d):
+    """Convert date/time objects → strings so jsonify() works."""
+    import datetime
+    for k in ("contest_date", "start_time", "end_time",
+              "created_at", "updated_at", "last_attempt_at", "sync_claimed_at"):
+        v = d.get(k)
+        if isinstance(v, datetime.datetime):
+            d[k] = v.strftime("%Y-%m-%d %H:%M:%S")
+        elif isinstance(v, datetime.date):
+            d[k] = v.strftime("%Y-%m-%d")
+        elif isinstance(v, datetime.time):
+            d[k] = v.strftime("%H:%M")
+    return d
+
+
 def list_contests(status=None):
     """Returns all contests, freshest first, with status recomputed live
     (not trusted from the stored column — see contest_utils.compute_status)."""
@@ -49,7 +64,7 @@ def list_contests(status=None):
 
     contests = []
     for r in rows:
-        d = dict(r)
+        d = _serialize_contest(dict(r))
         d["status"] = compute_status(d["contest_date"], d["start_time"], d["end_time"])
         contests.append(d)
 
@@ -63,7 +78,7 @@ def get_contest(contest_id):
         row = db.execute("SELECT * FROM contest_events WHERE id=?", (contest_id,)).fetchone()
     if not row:
         return None
-    d = dict(row)
+    d = _serialize_contest(dict(row))
     d["status"] = compute_status(d["contest_date"], d["start_time"], d["end_time"])
     return d
 
