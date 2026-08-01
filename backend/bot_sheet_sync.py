@@ -118,7 +118,7 @@ def get_leetcode_details(slug, session_obj=None):
 import atexit
 from filelock import FileLock
 
-SHEET_LOCK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sheet_sync.lock")
+SHEET_LOCK_PATH = os.path.join(os.environ.get("TMPDIR", "/tmp"), "sheet_sync.lock")
 
 import os
 import json
