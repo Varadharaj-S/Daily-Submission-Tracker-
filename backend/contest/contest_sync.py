@@ -4,10 +4,13 @@ submissions (no live API calls) and writes results to the Google Sheet.
 
 How grading works:
   The daily bot (normal_sync.py) already pulls every accepted submission
-  into the `submissions` table with submitted_at timestamps. Grading a
-  contest = one SQL query: which of this contest's problems (contest_problems)
-  does each student have a submission row for, with submitted_at inside
-  [contest_start, contest_end]?
+  into the `submissions` table. There is no exact-time column on that
+  table — only `solved_date` (text, DD-MM-YYYY for most rows, ISO for a
+  few older ones; see utils.helpers._parse_any_date). So grading a
+  contest = which of this contest's problems (contest_problems) does each
+  student have a submission row for, solved on the contest's calendar
+  date? (Day-level match, not a start/end time window — we don't have
+  the data to do better than that.)
 
 Entry points:
   run_due_contests()    — called by cron.py (Vercel cron) every 5 min
@@ -15,11 +18,12 @@ Entry points:
 """
 
 import traceback
+from datetime import datetime
 
 from database.db import get_db
 from contest import contest_service
 from contest import contest_sheet
-from contest.contest_utils import get_contest_window
+from utils.helpers import _parse_any_date
 
 MAX_SYNC_ATTEMPTS = 5
 
@@ -84,17 +88,25 @@ def _get_participants(platform):
 
 # ── Submission lookup ─────────────────────────────────────────────────────────
 
-def _solved_problem_codes(db, user_id, platform, start_dt, end_dt):
-    """Problem IDs this student solved on this platform within the window."""
+def _solved_problem_codes(db, user_id, platform, contest_date):
+    """Problem IDs this student solved on this platform, on the contest's
+    calendar date. `submissions` has no submitted_at/exact-time column —
+    only solved_date (text, mixed formats) — so we fetch this user's rows
+    for the platform and filter by parsed date in Python rather than in
+    SQL (a raw SQL date cast would blow up on the non-uniform rows)."""
     rows = db.execute("""
-        SELECT DISTINCT problem_id
+        SELECT DISTINCT problem_id, solved_date
         FROM submissions
         WHERE user_id = ?
           AND platform = ?
-          AND submitted_at IS NOT NULL
-          AND submitted_at BETWEEN ? AND ?
-    """, (user_id, platform, start_dt, end_dt)).fetchall()
-    return {r["problem_id"] for r in rows}
+    """, (user_id, platform)).fetchall()
+
+    codes = set()
+    for r in rows:
+        dt = _parse_any_date(r["solved_date"])
+        if dt and dt.date() == contest_date:
+            codes.add(r["problem_id"])
+    return codes
 
 
 # ── Core sync ─────────────────────────────────────────────────────────────────
@@ -132,7 +144,9 @@ def sync_one_contest(contest):
             _log(contest_id, "failed", attempts, msg, msg)
             return False, msg
 
-        start_dt, end_dt = get_contest_window(contest)
+        contest_date = contest["contest_date"]
+        if isinstance(contest_date, str):
+            contest_date = datetime.strptime(contest_date, "%Y-%m-%d").date()
         participants = _get_participants(contest["platform"])
 
         results_by_user_id = {}
@@ -140,7 +154,7 @@ def sync_one_contest(contest):
             solved_by_user = {}
             for p in participants:
                 solved = _solved_problem_codes(
-                    db, p["id"], contest["platform"], start_dt, end_dt
+                    db, p["id"], contest["platform"], contest_date
                 )
                 solved_by_user[p["id"]] = (p["username"], solved & problem_codes)
 
