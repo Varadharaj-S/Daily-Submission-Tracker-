@@ -76,5 +76,5 @@ def import_lc():
 
     return jsonify({
         "success": True,
-        "message": "Import started"
+        "message": "Import completed ✅ Your sheet will be updated in a few minutes."
     })

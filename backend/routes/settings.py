@@ -280,9 +280,14 @@ def feedback():
                 "message": "Feedback is empty"
             })
 
-        sender_email = os.getenv("SMTP_EMAIL")
-        sender_password = os.getenv("SMTP_APP_PASSWORD")
-        owner_email = os.getenv("OWNER_EMAIL")
+        sender_email = os.environ.get("SMTP_USER", "")
+        sender_password = os.environ.get("SMTP_PASS", "")
+        # OWNER_EMAIL = who receives feedback (your personal/admin email)
+        # Falls back to FROM_EMAIL then SMTP_USER if not set
+        owner_email = os.environ.get("OWNER_EMAIL") or os.environ.get("FROM_EMAIL") or sender_email
+
+        if not sender_email or not sender_password:
+            return jsonify({"success": False, "message": "Email not configured on server."})
 
         msg = MIMEText(f"""
 User: {current_user.username}

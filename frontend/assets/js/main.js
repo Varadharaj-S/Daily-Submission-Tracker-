@@ -94,9 +94,9 @@ async function importLeetCode() {
     const data = await res.json();
     if (status) {
       status.className = "sync-status " + (data.success ? "sync-ok" : "sync-err");
-      status.textContent = data.message || (data.success ? "Import started" : "Import failed");
+      status.textContent = data.message || (data.success ? "Import completed ✅" : "Import failed");
     }
-    showToast(data.message || (data.success ? "Import started ✅" : "Import failed"), data.success ? "success" : "error");
+    showToast(data.message || (data.success ? "Import completed ✅" : "Import failed"), data.success ? "success" : "error");
     if (data.success) {
       setTimeout(() => location.reload(), 5000);
     } else {

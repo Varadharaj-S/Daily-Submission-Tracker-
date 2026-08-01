@@ -50,31 +50,43 @@ async function importLeetCode() {
   if (spinner) spinner.style.display = "inline-block";
   try {
     const data = await apiPostJSON("/import_lc", {});
-    alert(data.message);
     if (data.success) {
-      if (label) label.innerText = "⏳ Import Running...";
-      setTimeout(() => location.reload(), 5000);
+      if (label) label.innerText = "Import Completed ✅";
+      if (spinner) spinner.style.display = "none";
+      showToast(data.message, "success");
+      setTimeout(() => location.reload(), 3000);
     } else {
       btn.disabled = false;
       if (label) label.innerText = "📥 Import Full LC";
       if (spinner) spinner.style.display = "none";
+      showToast(data.message || "Import failed", "error");
     }
   } catch (err) {
     console.error(err);
-    alert("Import failed");
     btn.disabled = false;
     if (label) label.innerText = "📥 Import Full LC";
     if (spinner) spinner.style.display = "none";
+    showToast("Import failed. Try again.", "error");
   }
 }
 
 async function sendFeedback() {
   const txt = document.getElementById("feedbackText").value;
-  if (!txt.trim()) { alert("Enter feedback"); return; }
-  const data = await apiPostJSON("/feedback", { feedback: txt });
-  if (data.success) {
-    alert("Feedback sent successfully");
-    document.getElementById("feedbackText").value = "";
+  if (!txt.trim()) { showToast("Enter some feedback first", "error"); return; }
+  const btn = document.querySelector(".feedback-card button") || document.querySelector("[onclick='sendFeedback()']");
+  if (btn) btn.disabled = true;
+  try {
+    const data = await apiPostJSON("/feedback", { feedback: txt });
+    if (data.success) {
+      showToast("Feedback sent ✅ Thank you!", "success");
+      document.getElementById("feedbackText").value = "";
+    } else {
+      showToast(data.message || "Failed to send feedback", "error");
+    }
+  } catch (err) {
+    showToast("Network error — try again", "error");
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
