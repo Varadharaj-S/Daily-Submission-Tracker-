@@ -141,7 +141,11 @@ def rebuild_user_sheet_from_db(user_id, username, get_db):
                             tags
                         FROM submissions
                         WHERE user_id = ?
-                        ORDER BY solved_date ASC, id ASC
+                        ORDER BY
+                            substr(solved_date,7,4) ASC,
+                            substr(solved_date,4,2) ASC,
+                            substr(solved_date,1,2) ASC,
+                            id ASC
                         """, (user_id,)).fetchall()
 
     rows = []
@@ -150,15 +154,10 @@ def rebuild_user_sheet_from_db(user_id, username, get_db):
         url = s.get("problem_url") or ""
         submission_url = s.get("submission_url") or ""
 
-        date = s["solved_date"]
-
-        try:
-            date = "'" + datetime.strptime(
-    s["solved_date"],
-    "%Y-%m-%d"
-).strftime("%d-%m-%Y")
-        except:
-            pass
+        # solved_date is already stored as DD-MM-YYYY text — just force it to
+        # display as text in the Sheet (leading apostrophe) instead of letting
+        # Sheets auto-reinterpret/reformat it as a date.
+        date = "'" + s["solved_date"]
 
         rows.append([
             date,
