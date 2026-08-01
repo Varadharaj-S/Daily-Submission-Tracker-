@@ -280,13 +280,20 @@ def feedback():
                 "message": "Feedback is empty"
             })
 
-        sender_email = os.environ.get("SMTP_USER", "")
+        # Env var priority (matches Vercel setup):
+        # FROM_EMAIL  = Gmail address used to send  (e.g. dsatracker@gmail.com)
+        # SMTP_PASS   = Gmail App Password for FROM_EMAIL
+        # ADMIN_EMAIL = where feedback lands (your personal inbox)
+        # Fallbacks keep it working even if some vars aren't set yet.
+        sender_email   = os.environ.get("FROM_EMAIL") or os.environ.get("SMTP_USER", "")
         sender_password = os.environ.get("SMTP_PASS", "")
-        # OWNER_EMAIL = who receives feedback (your personal/admin email)
-        # Falls back to FROM_EMAIL then SMTP_USER if not set
-        owner_email = os.environ.get("OWNER_EMAIL") or os.environ.get("FROM_EMAIL") or sender_email
+        owner_email    = os.environ.get("ADMIN_EMAIL") or os.environ.get("FROM_EMAIL") or sender_email
 
         if not sender_email or not sender_password:
+            missing = []
+            if not sender_email:   missing.append("FROM_EMAIL")
+            if not sender_password: missing.append("SMTP_PASS")
+            print(f"[Feedback] missing env vars: {missing}")
             return jsonify({"success": False, "message": "Email not configured on server."})
 
         msg = MIMEText(f"""
