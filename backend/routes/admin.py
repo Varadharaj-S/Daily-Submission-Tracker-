@@ -19,7 +19,7 @@ from utils.helpers import run_background, rows_to_dicts
 from flask_login import current_user
 from services.sync_engine import sync_user_data
 from workers.backup_worker import run_backup, run_restore, list_backups
-from normal_sync import rebuild_user_sheet_from_db
+from normal_sync import rebuild_user_sheet_from_db, backfill_missing_rows_from_db
 
 
 # ── Admin Dashboard ────────────────────────────────────────────────────────────
@@ -325,11 +325,11 @@ def admin_restore_sheet(uid):
     if not u:
         return jsonify({"ok": False, "message": "User not found"}), 404
     try:
-        count = rebuild_user_sheet_from_db(uid, u["username"], get_db)
-        log_admin("restore_sheet", u["username"], f"{count} rows restored")
-        return jsonify({"ok": True, "message": f"Restored {count} rows for {u['username']}"})
+        count = backfill_missing_rows_from_db(uid, u["username"], get_db)
+        log_admin("restore_sheet", u["username"], f"{count} rows backfilled")
+        return jsonify({"ok": True, "message": f"Backfilled {count} missing rows for {u['username']}"})
     except Exception as e:
-        return jsonify({"ok": False, "message": f"Restore failed: {e}"}), 500
+        return jsonify({"ok": False, "message": f"Backfill failed: {e}"}), 500
 
 
 @app.route("/admin/restore_all_sheets", methods=["POST"])
@@ -343,8 +343,8 @@ def admin_restore_all_sheets():
             ).fetchall()
         for u in users:
             try:
-                count = rebuild_user_sheet_from_db(u["id"], u["username"], get_db)
-                print(f"[RestoreAll] {u['username']}: {count} rows restored")
+                count = backfill_missing_rows_from_db(u["id"], u["username"], get_db)
+                print(f"[RestoreAll] {u['username']}: {count} rows backfilled")
             except Exception as e:
                 print(f"[RestoreAll] {u['username']}: {e}")
             time.sleep(2)  # stay under Google Sheets API rate limits
