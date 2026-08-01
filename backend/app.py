@@ -38,7 +38,7 @@ from routes import google_sheet    # noqa: E402,F401  /my_sheet
 from routes import leaderboard     # noqa: E402,F401  /user/<username>, /follow, /friends, /leaderboard
 from routes import admin           # noqa: E402,F401  /admin/*
 from routes import reports         # noqa: E402,F401  /weekly_report, /weekly_csv, /api/weekly_report
-from backend.routes import contest_route         # noqa: E402,F401  /student_contest, /contest/* (Contest Tracker, Phase 1)
+from backend.routes import contest        # noqa: E402,F401  /student_contest, /contest/* (Contest Tracker, Phase 1)
 from routes import analytics       # noqa: E402,F401  (Phase 3 — currently empty, see file docstring)
 from routes import notifications   # noqa: E402,F401  (Phase 3 — currently empty, see file docstring)
 from routes import api             # noqa: E402,F401  (Phase 3 — currently empty, see file docstring)
