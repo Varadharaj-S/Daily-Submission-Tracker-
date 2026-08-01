@@ -183,11 +183,16 @@ def backfill_missing_rows_from_db(user_id, username, get_db):
             1,
         ])
 
-    # Small chunks so each single request finishes fast and well within a
-    # serverless function's timeout window.
+    # Write at an EXACT row number we compute ourselves, instead of
+    # append_rows()'s auto-detected "next empty row" — merged DATE cells
+    # (from regroup_sheet) leave blanks in column A that can trick that
+    # auto-detection into inserting mid-sheet instead of at the true end.
+    next_row = len(existing) + 1
     CHUNK = 300
     for i in range(0, len(rows), CHUNK):
-        sheet.append_rows(rows[i:i + CHUNK], value_input_option="USER_ENTERED")
+        chunk = rows[i:i + CHUNK]
+        sheet.update(f"A{next_row}", chunk, value_input_option="USER_ENTERED")
+        next_row += len(chunk)
         print(f"📄 Backfilled {min(i + CHUNK, len(rows))}/{len(rows)} rows for '{username}'")
 
     try:
@@ -309,13 +314,14 @@ def rebuild_user_sheet_from_db(user_id, username, get_db):
                 row[6] = count_map[row[0]]
 
             # Write in chunks so one oversized request can't fail the whole
-            # batch on sheets with a lot of history.
+            # batch on sheets with a lot of history. Explicit row numbers,
+            # not append_rows()'s auto-detection (see notes above).
             CHUNK = 500
+            next_row = 2
             for i in range(0, len(rows), CHUNK):
-                sheet.append_rows(
-                    rows[i:i + CHUNK],
-                    value_input_option="USER_ENTERED"
-                )
+                chunk = rows[i:i + CHUNK]
+                sheet.update(f"A{next_row}", chunk, value_input_option="USER_ENTERED")
+                next_row += len(chunk)
 
             # regroup: merge DATE and COUNT cells for consecutive same-date rows
             regroup_sheet(sheet)
@@ -347,7 +353,12 @@ def append_new_rows_to_sheet(username, new_rows):
     """
     sheet = get_sheet(username)
 
-    sheet.append_rows(new_rows, value_input_option="USER_ENTERED")
+    # Same explicit-row-number approach as backfill: merged DATE cells can
+    # confuse append_rows()'s auto "next empty row" detection and cause it
+    # to insert mid-sheet instead of at the true end.
+    existing = sheet.get_all_values()
+    next_row = len(existing) + 1
+    sheet.update(f"A{next_row}", new_rows, value_input_option="USER_ENTERED")
 
     # Recompute COUNT (col G) for every date across the sheet without
     # touching columns A-F — purely additive/overwrite on one column.

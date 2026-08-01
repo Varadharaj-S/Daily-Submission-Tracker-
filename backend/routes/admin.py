@@ -332,6 +332,25 @@ def admin_restore_sheet(uid):
         return jsonify({"ok": False, "message": f"Backfill failed: {e}"}), 500
 
 
+# One-time full re-sort — clears and rewrites the tab in correct date order.
+# Use this once to fix ordering after rows got inserted out of place; use
+# /admin/restore_sheet (backfill, above) for routine top-ups afterwards.
+@app.route("/admin/rebuild_sheet/<int:uid>", methods=["POST"])
+@login_required
+@admin_required
+def admin_rebuild_sheet(uid):
+    with get_db() as db:
+        u = db.execute("SELECT username FROM users WHERE id=%s", (uid,)).fetchone()
+    if not u:
+        return jsonify({"ok": False, "message": "User not found"}), 404
+    try:
+        count = rebuild_user_sheet_from_db(uid, u["username"], get_db)
+        log_admin("rebuild_sheet", u["username"], f"{count} rows rebuilt")
+        return jsonify({"ok": True, "message": f"Rebuilt {count} rows for {u['username']} in date order"})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Rebuild failed: {e}"}), 500
+
+
 @app.route("/admin/restore_all_sheets", methods=["POST"])
 @login_required
 @admin_required
