@@ -77,11 +77,30 @@ def _get_spreadsheet(client=None):
     return client.open_by_key(SHEET_ID)
 
 
+# ── One-time upgrade for sheets created before the two-row header ────────────
+def _migrate_old_single_row_header(sheet):
+    """Old sheets (created by the pre-rewrite contest_sheet.py) have
+    BASE_COLUMNS directly on row 1 — no date row above it. Detected by
+    row 1's first cell being exactly 'Reg No'. Fix: insert one blank row
+    above it, so the old header becomes row 2 (CODE_HEADER_ROW) and row 1
+    becomes the (initially blank) date row this rewrite expects. Existing
+    contest columns just won't have a date label until their next sync —
+    harmless, the date is cosmetic and nothing reads it back. Idempotent:
+    once row 1 no longer starts with 'Reg No', this is a no-op."""
+    row1 = sheet.row_values(1)
+    if row1 and row1[0].strip() == "Reg No":
+        blank_row = [""] * max(len(row1), 1)
+        sheet.insert_row(blank_row, 1)
+        return True
+    return False
+
+
 # ── Sheet creation (once, ever) ────────────────────────────────────────────────
 def get_or_create_student_contest_sheet(client=None):
     spreadsheet = _get_spreadsheet(client)
     try:
         sheet = spreadsheet.worksheet(STUDENT_CONTEST_TAB)
+        _migrate_old_single_row_header(sheet)
     except gspread.exceptions.WorksheetNotFound:
         sheet = spreadsheet.add_worksheet(title=STUDENT_CONTEST_TAB, rows="2000", cols="20")
         code_header = BASE_COLUMNS + SUMMARY_COLUMNS + [KEY_COLUMN]

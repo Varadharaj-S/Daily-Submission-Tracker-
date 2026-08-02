@@ -33,6 +33,10 @@ class FakeWorksheet:
         for r in rows:
             self.rows.append(list(r))
 
+    def insert_row(self, values, index):
+        """1-based index, mirrors gspread's insert_row."""
+        self.rows.insert(index - 1, list(values))
+
     def insert_cols(self, values, col):
         """values: list of [v] (one value per row, header first). col: 1-based
         insertion index — mirrors gspread's insert_cols semantics."""
