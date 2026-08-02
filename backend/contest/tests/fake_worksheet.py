@@ -38,15 +38,19 @@ class FakeWorksheet:
         self.rows.insert(index - 1, list(values))
 
     def insert_cols(self, values, col):
-        """values: list of [v] (one value per row, header first). col: 1-based
-        insertion index — mirrors gspread's insert_cols semantics."""
-        idx = col - 1  # 0-based
-        for i in range(len(self.rows)):
-            v = values[i][0] if i < len(values) else ""
-            row = self.rows[i]
-            while len(row) < idx:
-                row.append("")
-            row.insert(idx, v)
+        """Mirrors real gspread's insert_cols: `values` is "a list of col
+        lists" — each inner list holds ONE COLUMN's values top-to-bottom
+        (row 0 first), not one inner list per row. Inserts len(values) new
+        columns starting at 1-based index `col`."""
+        idx = col - 1  # 0-based start column
+        for col_offset, col_values in enumerate(values):
+            insert_at = idx + col_offset
+            for row_i in range(len(self.rows)):
+                v = col_values[row_i] if row_i < len(col_values) else ""
+                row = self.rows[row_i]
+                while len(row) < insert_at:
+                    row.append("")
+                row.insert(insert_at, v)
 
     def update(self, cell_range, values, value_input_option=None):
         m = re.match(r"([A-Z]+)(\d+):([A-Z]+)(\d+)", cell_range)

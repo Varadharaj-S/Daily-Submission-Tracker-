@@ -197,7 +197,11 @@ def add_contest_column(sheet, contest_code, contest_date=None):
     num_data_rows = max(len(all_values) - (FIRST_DATA_ROW - 1), 0)
 
     date_label = _format_date_label(contest_date)
-    column_values = [[date_label], [contest_code]] + [[""] for _ in range(num_data_rows)]
+    # gspread's insert_cols wants "a list of col lists" — ONE inner list
+    # per column, containing that column's values top-to-bottom — NOT one
+    # inner list per row. We're inserting a single column, so this must be
+    # a single inner list with every row's value in order.
+    column_values = [[date_label, contest_code] + ([""] * num_data_rows)]
     sheet.insert_cols(column_values, total_solved_idx)
     return True
 
