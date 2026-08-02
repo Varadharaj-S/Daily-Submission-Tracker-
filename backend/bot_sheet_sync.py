@@ -254,7 +254,8 @@ if CF_USER:
 
             tags  = problem.get("tags", [])
             topic = ", ".join(tags) if tags else "General"
-            date = datetime.fromtimestamp(int(sub["creationTimeSeconds"])).strftime("%Y-%m-%d")
+            epoch = int(sub["creationTimeSeconds"])
+            date = datetime.fromtimestamp(epoch).strftime("%Y-%m-%d")
 
             all_data.append([
     date,
@@ -263,7 +264,8 @@ if CF_USER:
     difficulty,
     "Codeforces",
     topic,
-    1
+    1,
+    epoch
 ])
 
     print("Codeforces collected ✅")
@@ -429,7 +431,7 @@ if LC_USER:
             submission_link = f"https://leetcode.com/submissions/detail/{sub['id']}/"
             title_cell = f'=HYPERLINK("{problem_link}", "{title}")'
 
-            all_data.append([date, title_cell, submission_link, difficulty, "LeetCode", topic, 1])
+            all_data.append([date, title_cell, submission_link, difficulty, "LeetCode", topic, 1, int(ts)])
 
         if not data.get("has_next", False):
             break
@@ -483,7 +485,7 @@ if AC_USER:
         else:
             difficulty, topic = "Unknown", "General"
 
-        all_data.append([date, title_cell, submission_link, difficulty, "AtCoder", topic, 1])
+        all_data.append([date, title_cell, submission_link, difficulty, "AtCoder", topic, 1, sub["epoch_second"]])
 
     print("AtCoder collected ✅")
 else:
@@ -495,7 +497,7 @@ else:
 
 if all_data:
     df = pd.DataFrame(all_data, columns=[
-        "DATE", "PROGRAM TITLE", "LINK", "DIFFICULTY", "PLATFORM", "TOPIC", "COUNT"
+        "DATE", "PROGRAM TITLE", "LINK", "DIFFICULTY", "PLATFORM", "TOPIC", "COUNT", "EPOCH"
     ])
     df = df.drop_duplicates(subset=["DATE", "PROGRAM TITLE", "PLATFORM"])
     df["DATE"] = pd.to_datetime(df["DATE"])   # ✅ keep ISO
@@ -509,6 +511,7 @@ if all_data:
     # 🔥 convert only for Google Sheet
     sheet_data = df.copy()
     sheet_data["DATE"] = sheet_data["DATE"].dt.strftime("%d-%m-%Y")
+    sheet_data = sheet_data.drop(columns=["EPOCH"])  # sheet only ever had 7 columns — keep it that way
 
 # ===============================
 # SAVE TO POSTGRESQL
@@ -542,6 +545,11 @@ for row in db_data.values.tolist():
     else:
         problem_id = problem_url
 
+    # row[7] is EPOCH (raw epoch seconds) — pandas may hand it back as a
+    # numpy float, so guard against NaN/None before converting.
+    epoch = row[7] if len(row) > 7 else None
+    solved_at = datetime.fromtimestamp(int(epoch)) if epoch is not None and not pd.isna(epoch) else None
+
     cursor.execute("""
 INSERT INTO submissions
 (
@@ -553,9 +561,10 @@ INSERT INTO submissions
     platform,
     difficulty,
     tags,
-    solved_date
+    solved_date,
+    solved_at
 )
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (user_id, platform, problem_id)
 DO NOTHING
 """, (
@@ -567,7 +576,8 @@ DO NOTHING
     row[4],   # platform
     row[3],   # difficulty
     row[5],   # tags
-    row[0]    # solved_date
+    row[0],   # solved_date
+    solved_at
 ))
 
     if cursor.rowcount > 0:

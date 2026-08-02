@@ -3,14 +3,25 @@ contest/contest_sync.py — grades a Completed contest from stored
 submissions (no live API calls) and writes results to the Google Sheet.
 
 How grading works:
-  The daily bot (normal_sync.py) already pulls every accepted submission
-  into the `submissions` table. There is no exact-time column on that
-  table — only `solved_date` (text, DD-MM-YYYY for most rows, ISO for a
-  few older ones; see utils.helpers._parse_any_date). So grading a
-  contest = which of this contest's problems (contest_problems) does each
-  student have a submission row for, solved on the contest's calendar
-  date? (Day-level match, not a start/end time window — we don't have
-  the data to do better than that.)
+  The daily bot (normal_sync.py / bot_sheet_sync.py) pulls every accepted
+  submission into the `submissions` table. Since migration 0005, each row
+  also carries `solved_at` (exact timestamp) alongside the older
+  `solved_date` (text, day-only). Rows synced before 0005 have
+  solved_at = NULL — we still know *which day* they were solved on, just
+  not the exact time.
+
+  For a contest's problems (contest_problems), each student's solves on
+  the contest's calendar date are split into two buckets:
+    - in_window:    solved_at falls inside [start_time, end_time], OR
+                     solved_at is NULL (legacy row — time unknown, so we
+                     give it the benefit of the doubt rather than losing
+                     the data)
+    - after_window:  solved_at is known and falls outside the window,
+                     but still on the contest's date (solved late)
+
+  The sheet shows this as "in_window(after_window)", e.g. "2(1)" — see
+  contest_sheet.py. Legacy rows can only ever produce in_window counts,
+  never a bracket, since there's no time to compare against the window.
 
 Entry points:
   run_due_contests()    — called by cron.py (Vercel cron) every 5 min
@@ -18,11 +29,11 @@ Entry points:
 """
 
 import traceback
-from datetime import datetime
 
 from database.db import get_db
 from contest import contest_service
 from contest import contest_sheet
+from contest.contest_utils import get_contest_window
 from utils.helpers import _parse_any_date
 
 MAX_SYNC_ATTEMPTS = 5
@@ -88,25 +99,46 @@ def _get_participants(platform):
 
 # ── Submission lookup ─────────────────────────────────────────────────────────
 
-def _solved_problem_codes(db, user_id, platform, contest_date):
-    """Problem IDs this student solved on this platform, on the contest's
-    calendar date. `submissions` has no submitted_at/exact-time column —
-    only solved_date (text, mixed formats) — so we fetch this user's rows
-    for the platform and filter by parsed date in Python rather than in
-    SQL (a raw SQL date cast would blow up on the non-uniform rows)."""
+def _solved_problem_details(db, user_id, platform, contest_date):
+    """For each problem this student solved on this platform, on the
+    contest's calendar date, returns {problem_id: solved_at}.
+    solved_at is a datetime for rows synced since migration 0005, or None
+    for legacy rows that only ever recorded the date. Filtering by day is
+    done in Python (via _parse_any_date) since solved_date's format isn't
+    uniform across rows — a raw SQL date cast would blow up on the mix."""
     rows = db.execute("""
-        SELECT DISTINCT problem_id, solved_date
+        SELECT DISTINCT problem_id, solved_date, solved_at
         FROM submissions
         WHERE user_id = ?
           AND platform = ?
     """, (user_id, platform)).fetchall()
 
-    codes = set()
+    details = {}
     for r in rows:
         dt = _parse_any_date(r["solved_date"])
         if dt and dt.date() == contest_date:
-            codes.add(r["problem_id"])
-    return codes
+            details[r["problem_id"]] = r["solved_at"]  # may be None
+    return details
+
+
+def _split_in_after_window(details, problem_codes, start_dt, end_dt):
+    """details: {problem_id: solved_at_or_None} for one student, already
+    filtered to the contest's date. Returns (in_window_count, after_window_count)
+    counting only problems that belong to this contest (problem_codes)."""
+    in_window = 0
+    after_window = 0
+    for pid, solved_at in details.items():
+        if pid not in problem_codes:
+            continue
+        if solved_at is None:
+            # Legacy row — no exact time to compare, give benefit of the
+            # doubt and count it as in-window rather than dropping it.
+            in_window += 1
+        elif start_dt <= solved_at <= end_dt:
+            in_window += 1
+        else:
+            after_window += 1
+    return in_window, after_window
 
 
 # ── Core sync ─────────────────────────────────────────────────────────────────
@@ -144,54 +176,61 @@ def sync_one_contest(contest):
             _log(contest_id, "failed", attempts, msg, msg)
             return False, msg
 
-        contest_date = contest["contest_date"]
-        if isinstance(contest_date, str):
-            contest_date = datetime.strptime(contest_date, "%Y-%m-%d").date()
+        start_dt, end_dt = get_contest_window(contest)
+        contest_date = start_dt.date()
         participants = _get_participants(contest["platform"])
 
         results_by_user_id = {}
         with get_db() as db:
             solved_by_user = {}
             for p in participants:
-                solved = _solved_problem_codes(
+                details = _solved_problem_details(
                     db, p["id"], contest["platform"], contest_date
                 )
-                solved_by_user[p["id"]] = (p["username"], solved & problem_codes)
+                in_window, after_window = _split_in_after_window(
+                    details, problem_codes, start_dt, end_dt
+                )
+                solved_by_user[p["id"]] = (p["username"], in_window, after_window)
 
-            # Local rank: most solved first, ties broken alphabetically
+            # Local rank: most in-window solves first (after-window solves
+            # don't count toward rank — they happened outside contest time),
+            # ties broken alphabetically.
             ranked = sorted(
-                [(uid, uname, s) for uid, (uname, s) in solved_by_user.items() if s],
-                key=lambda x: (-len(x[2]), x[1])
+                [(uid, uname, iw) for uid, (uname, iw, aw) in solved_by_user.items() if iw > 0],
+                key=lambda x: (-x[2], x[1])
             )
             rank_by_user = {uid: i + 1 for i, (uid, _, _) in enumerate(ranked)}
 
-            for user_id, (username, solved_set) in solved_by_user.items():
-                solved_count  = len(solved_set)
-                participated  = solved_count > 0
+            for user_id, (username, in_window, after_window) in solved_by_user.items():
+                participated  = (in_window + after_window) > 0
                 rank          = rank_by_user.get(user_id)
                 results_by_user_id[user_id] = {
-                    "solved":       solved_count,
-                    "participated": participated,
-                    "rank":         rank,
-                    "score":        solved_count,
+                    "solved":        in_window,
+                    "after_window":  after_window,
+                    "participated":  participated,
+                    "rank":          rank,
+                    "score":         in_window,
                 }
 
                 db.execute("""
                     INSERT INTO contest_results
-                        (contest_id, user_id, username, solved, attendance, rank, score, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+                        (contest_id, user_id, username, solved, after_window,
+                         attendance, rank, score, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
                     ON CONFLICT (contest_id, user_id) DO UPDATE SET
                         solved=EXCLUDED.solved,
+                        after_window=EXCLUDED.after_window,
                         attendance=EXCLUDED.attendance,
                         rank=EXCLUDED.rank,
                         score=EXCLUDED.score,
                         updated_at=NOW()
-                """, (contest_id, user_id, username, solved_count, participated, rank, solved_count))
+                """, (contest_id, user_id, username, in_window, after_window,
+                      participated, rank, in_window))
             db.commit()
 
         # Write to Google Sheet
         sheet_ok, sheet_msg = contest_sheet.write_contest_results(
-            contest["contest_code"], results_by_user_id
+            contest["contest_code"], contest_date, results_by_user_id
         )
 
         with get_db() as db:

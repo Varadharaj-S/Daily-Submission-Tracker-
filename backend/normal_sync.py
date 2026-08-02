@@ -417,6 +417,22 @@ def parse_timestamp(ts):
         pass
     return datetime.now().strftime("%d-%m-%Y")
 
+def epoch_seconds_from_ts(ts):
+    """Same normalization as parse_timestamp, but returns raw epoch seconds
+    (int) instead of a formatted date string — used for submissions.solved_at.
+    Returns None if ts isn't a numeric timestamp (e.g. LC gave us a date
+    string instead) since we can't derive an exact time from that."""
+    try:
+        if isinstance(ts, str) and ts.isdigit():
+            ts = int(ts)
+        if isinstance(ts, (int, float)):
+            if ts > 10**12:
+                ts = ts / 1000
+            return int(ts)
+    except Exception:
+        pass
+    return None
+
 def load_cache(path):
     if not os.path.exists(path):
         return []
@@ -513,7 +529,8 @@ def fetch_cf(cf_handle):
             diff = "Hard"
 
         topic = ", ".join(prob.get("tags", [])) or "General"
-        date = datetime.fromtimestamp(sub["creationTimeSeconds"]).strftime("%d-%m-%Y")
+        epoch = sub["creationTimeSeconds"]
+        date = datetime.fromtimestamp(epoch).strftime("%d-%m-%Y")
 
 
         rows.append([
@@ -524,6 +541,7 @@ def fetch_cf(cf_handle):
             "Codeforces",
             topic,
             1,
+            epoch,  # hidden 8th element: raw epoch seconds, used for submissions.solved_at (stripped before writing to the sheet — see sync_user_data)
         ])
 
     print(f"CF done ✅ ({len(rows)})")
@@ -624,6 +642,7 @@ def fetch_lc(lc_handle):
                     or int(time.time())
                 )
                 date = parse_timestamp(ts)
+                epoch = epoch_seconds_from_ts(ts)
 
                 sub_id = (
                     sub.get("id")
@@ -650,6 +669,7 @@ def fetch_lc(lc_handle):
                     "LeetCode",
                     topic,
                     1,
+                    epoch,  # hidden 8th element: see fetch_cf comment
                 ])
 
             if temp_rows:
@@ -735,6 +755,7 @@ def fetch_ac(ac_handle):
             "AtCoder",
             topic,
             1,
+            sub["epoch_second"],  # hidden 8th element: see fetch_cf comment
         ])
 
     print(f"AC done ✅ ({len(rows)})")
@@ -793,6 +814,12 @@ def sync_user_data(user, get_db):
         else:
             problem_id = problem_url
 
+        # Hidden 8th element (see fetch_cf/fetch_lc/fetch_ac) — raw epoch
+        # seconds when available, so contest grading can tell in-window
+        # vs after-window solves. None for legacy/cache rows without it.
+        epoch = row[7] if len(row) > 7 else None
+        solved_at = datetime.fromtimestamp(epoch) if epoch else None
+
         cursor.execute("""
                 INSERT INTO submissions
                 (
@@ -803,9 +830,10 @@ def sync_user_data(user, get_db):
                     platform,
                     difficulty,
                     tags,
-                    solved_date
+                    solved_date,
+                    solved_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (user_id, platform, problem_id) DO NOTHING
                 """, (
                     user_id,
@@ -815,12 +843,13 @@ def sync_user_data(user, get_db):
                     platform,
                     row[3],      # difficulty
                     row[5],      # <-- TAGS
-                    row[0]       # solved_date
+                    row[0],      # solved_date
+                    solved_at
                 ))
 
         if cursor.rowcount > 0:
             new_count += 1
-            new_rows.append(row)
+            new_rows.append(row[:7])  # keep the sheet's 7-column format — drop the hidden epoch
 
     conn.commit()
     conn.close()
