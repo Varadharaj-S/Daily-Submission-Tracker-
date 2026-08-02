@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "daily-submission-tracker",
+  "compatibility_date": "2026-08-02",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+
+  // worker.js is the entry point — it handles /api/* proxying
+  // and falls through to Assets for everything else.
+  "main": "worker.js",
+
+  // Static assets (all the HTML/CSS/JS files in frontend/)
+  "assets": {
+    "directory": ".",
+    "binding": "ASSETS"
+  }
+}
