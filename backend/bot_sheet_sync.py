@@ -548,7 +548,7 @@ for row in db_data.values.tolist():
     # row[7] is EPOCH (raw epoch seconds) — pandas may hand it back as a
     # numpy float, so guard against NaN/None before converting.
     epoch = row[7] if len(row) > 7 else None
-    solved_at = datetime.fromtimestamp(int(epoch)) if epoch is not None and not pd.isna(epoch) else None
+    submitted_at = datetime.fromtimestamp(int(epoch)) if epoch is not None and not pd.isna(epoch) else None
 
     cursor.execute("""
 INSERT INTO submissions
@@ -562,7 +562,7 @@ INSERT INTO submissions
     difficulty,
     tags,
     solved_date,
-    solved_at
+    submitted_at
 )
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (user_id, platform, problem_id)
@@ -577,7 +577,7 @@ DO NOTHING
     row[3],   # difficulty
     row[5],   # tags
     row[0],   # solved_date
-    solved_at
+    submitted_at
 ))
 
     if cursor.rowcount > 0:

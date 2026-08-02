@@ -1,21 +1,32 @@
 -- =============================================================================
--- DSA Tracker v4 — Migration 0005: exact submission timestamp
+-- DSA Tracker v4 — Migration 0005: reconcile submitted_at, add after_window
 -- =============================================================================
--- Additive, idempotent. Needed for contest grading with a real start/end
--- time window (contest/contest_sync.py): `submissions.solved_date` is a
--- text DD-MM-YYYY/ISO date with no time-of-day, so there's no way to tell
--- whether a problem was solved during the contest window or later the
--- same day. This adds a real timestamp column going forward.
+-- Additive, idempotent.
 --
--- Existing rows are NOT backfilled — the platforms' epoch timestamps
--- were never stored, so there's nothing to derive an exact time from for
--- old submissions. Those rows keep solved_at = NULL; contest_sync.py
--- treats NULL solved_at as "date known, exact time unknown" and falls
--- back to day-level matching for them (see contest_sync.py comments).
+-- `submissions.submitted_at` already exists on the live DB — confirmed via
+-- SQL Editor on 2026-08-02 — but it was never in database/db.py's tracked
+-- CREATE TABLE, so this migration file (and everything that assumed the
+-- column didn't exist) was written against a stale picture of the schema.
+-- This statement is a no-op against the live DB; it exists so the tracked
+-- schema catches up to reality, and so a fresh/dev database ends up with
+-- the same column. `ADD COLUMN IF NOT EXISTS` does not touch/retype an
+-- already-existing column, so this is safe either way.
+--
+-- Known issue, not fixed by this migration alone: submitted_at is
+-- inconsistently populated — normal_sync.py's incremental path and
+-- bot_sheet_sync.py's full-import path didn't both set it (see that
+-- conversation's "submitted_at NULL bug" notes). Both are fixed as of
+-- this same change (normal_sync.py + bot_sheet_sync.py now capture the
+-- platform's epoch timestamp and set submitted_at on every insert), but
+-- rows already in the DB from before that fix keep submitted_at = NULL —
+-- there's no way to derive the exact time retroactively, since the raw
+-- epoch was never stored for them. contest_sync.py treats NULL
+-- submitted_at as "date known, exact time unknown" and falls back to
+-- day-level matching for those rows (see contest_sync.py's docstring).
 -- =============================================================================
 
-ALTER TABLE submissions ADD COLUMN IF NOT EXISTS solved_at TIMESTAMPTZ;
-CREATE INDEX IF NOT EXISTS idx_sub_solved_at ON submissions(user_id, platform, solved_at);
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_sub_submitted_at ON submissions(user_id, platform, submitted_at);
 
 -- contest_sync.py now splits solves into "during the contest window" vs
 -- "later, same day" (see that file's module docstring) — this column

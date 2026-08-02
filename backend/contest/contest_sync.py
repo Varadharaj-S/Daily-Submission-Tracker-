@@ -4,24 +4,27 @@ submissions (no live API calls) and writes results to the Google Sheet.
 
 How grading works:
   The daily bot (normal_sync.py / bot_sheet_sync.py) pulls every accepted
-  submission into the `submissions` table. Since migration 0005, each row
-  also carries `solved_at` (exact timestamp) alongside the older
-  `solved_date` (text, day-only). Rows synced before 0005 have
-  solved_at = NULL — we still know *which day* they were solved on, just
-  not the exact time.
+  submission into the `submissions` table, which carries `submitted_at`
+  (exact timestamp) alongside the older `solved_date` (text, day-only).
+  submitted_at already existed in the live DB before this file did — it
+  just wasn't in database/db.py's tracked schema (see migration 0005's
+  comment) and wasn't reliably populated by every insert path. Rows with
+  submitted_at = NULL (older rows, or ones that went through a path that
+  didn't set it) still have solved_date, so we know *which day* they were
+  solved on, just not the exact time.
 
   For a contest's problems (contest_problems), each student's solves on
   the contest's calendar date are split into two buckets:
-    - in_window:    solved_at falls inside [start_time, end_time], OR
-                     solved_at is NULL (legacy row — time unknown, so we
-                     give it the benefit of the doubt rather than losing
-                     the data)
-    - after_window:  solved_at is known and falls outside the window,
+    - in_window:    submitted_at falls inside [start_time, end_time], OR
+                     submitted_at is NULL (time unknown — give it the
+                     benefit of the doubt rather than losing the data)
+    - after_window:  submitted_at is known and falls outside the window,
                      but still on the contest's date (solved late)
 
   The sheet shows this as "in_window(after_window)", e.g. "2(1)" — see
-  contest_sheet.py. Legacy rows can only ever produce in_window counts,
-  never a bracket, since there's no time to compare against the window.
+  contest_sheet.py. Rows without submitted_at can only ever produce
+  in_window counts, never a bracket, since there's no time to compare
+  against the window.
 
 Entry points:
   run_due_contests()    — called by cron.py (Vercel cron) every 5 min
@@ -101,13 +104,13 @@ def _get_participants(platform):
 
 def _solved_problem_details(db, user_id, platform, contest_date):
     """For each problem this student solved on this platform, on the
-    contest's calendar date, returns {problem_id: solved_at}.
-    solved_at is a datetime for rows synced since migration 0005, or None
+    contest's calendar date, returns {problem_id: submitted_at}.
+    submitted_at is a datetime for rows where it was populated, or None
     for legacy rows that only ever recorded the date. Filtering by day is
     done in Python (via _parse_any_date) since solved_date's format isn't
     uniform across rows — a raw SQL date cast would blow up on the mix."""
     rows = db.execute("""
-        SELECT DISTINCT problem_id, solved_date, solved_at
+        SELECT DISTINCT problem_id, solved_date, submitted_at
         FROM submissions
         WHERE user_id = ?
           AND platform = ?
@@ -117,24 +120,32 @@ def _solved_problem_details(db, user_id, platform, contest_date):
     for r in rows:
         dt = _parse_any_date(r["solved_date"])
         if dt and dt.date() == contest_date:
-            details[r["problem_id"]] = r["solved_at"]  # may be None
+            submitted_at = r["submitted_at"]
+            if submitted_at is not None and submitted_at.tzinfo is not None:
+                # get_contest_window() returns naive datetimes — strip any
+                # tzinfo here so the comparison in _split_in_after_window
+                # can't blow up on "can't compare offset-naive and
+                # offset-aware datetimes" regardless of the live column's
+                # actual type (TIMESTAMP vs TIMESTAMPTZ).
+                submitted_at = submitted_at.replace(tzinfo=None)
+            details[r["problem_id"]] = submitted_at  # may be None
     return details
 
 
 def _split_in_after_window(details, problem_codes, start_dt, end_dt):
-    """details: {problem_id: solved_at_or_None} for one student, already
+    """details: {problem_id: submitted_at_or_None} for one student, already
     filtered to the contest's date. Returns (in_window_count, after_window_count)
     counting only problems that belong to this contest (problem_codes)."""
     in_window = 0
     after_window = 0
-    for pid, solved_at in details.items():
+    for pid, submitted_at in details.items():
         if pid not in problem_codes:
             continue
-        if solved_at is None:
+        if submitted_at is None:
             # Legacy row — no exact time to compare, give benefit of the
             # doubt and count it as in-window rather than dropping it.
             in_window += 1
-        elif start_dt <= solved_at <= end_dt:
+        elif start_dt <= submitted_at <= end_dt:
             in_window += 1
         else:
             after_window += 1

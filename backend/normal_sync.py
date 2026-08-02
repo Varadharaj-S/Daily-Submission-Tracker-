@@ -419,7 +419,7 @@ def parse_timestamp(ts):
 
 def epoch_seconds_from_ts(ts):
     """Same normalization as parse_timestamp, but returns raw epoch seconds
-    (int) instead of a formatted date string — used for submissions.solved_at.
+    (int) instead of a formatted date string — used for submissions.submitted_at.
     Returns None if ts isn't a numeric timestamp (e.g. LC gave us a date
     string instead) since we can't derive an exact time from that."""
     try:
@@ -541,7 +541,7 @@ def fetch_cf(cf_handle):
             "Codeforces",
             topic,
             1,
-            epoch,  # hidden 8th element: raw epoch seconds, used for submissions.solved_at (stripped before writing to the sheet — see sync_user_data)
+            epoch,  # hidden 8th element: raw epoch seconds, used for submissions.submitted_at (stripped before writing to the sheet — see sync_user_data)
         ])
 
     print(f"CF done ✅ ({len(rows)})")
@@ -818,7 +818,7 @@ def sync_user_data(user, get_db):
         # seconds when available, so contest grading can tell in-window
         # vs after-window solves. None for legacy/cache rows without it.
         epoch = row[7] if len(row) > 7 else None
-        solved_at = datetime.fromtimestamp(epoch) if epoch else None
+        submitted_at = datetime.fromtimestamp(epoch) if epoch else None
 
         cursor.execute("""
                 INSERT INTO submissions
@@ -831,7 +831,7 @@ def sync_user_data(user, get_db):
                     difficulty,
                     tags,
                     solved_date,
-                    solved_at
+                    submitted_at
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (user_id, platform, problem_id) DO NOTHING
@@ -844,7 +844,7 @@ def sync_user_data(user, get_db):
                     row[3],      # difficulty
                     row[5],      # <-- TAGS
                     row[0],      # solved_date
-                    solved_at
+                    submitted_at
                 ))
 
         if cursor.rowcount > 0:
