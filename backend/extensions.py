@@ -37,7 +37,7 @@ app.config.from_object(Config)
 os.makedirs(Config.BACKUP_DIR, exist_ok=True)  # Config.BACKUP_DIR is /tmp/backups on Vercel, "backups" elsewhere
 
 login_manager = LoginManager(app)
-login_manager.session_protection = "strong"
+login_manager.session_protection = "basic"
 
 
 @login_manager.unauthorized_handler
