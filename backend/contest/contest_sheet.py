@@ -177,7 +177,7 @@ def recalculate_summary(sheet):
         total_solved = 0
         attended = 0
         for cell in contest_cells:
-            cell = str(cell if cell is not None else "").strip()
+            cell = (cell or "").strip()
             if cell and cell != ABSENT_MARKER:
                 attended += 1
                 if cell.lstrip("-").isdigit():
@@ -216,80 +216,6 @@ def ensure_sheet_for_contest(contest):
         return True, msg
     except Exception as e:
         return False, f"Google Sheet sync failed: {e}"
-
-
-def write_contest_results(contest_code, results_by_user_id):
-    """
-    Writes each participant's solved count into their row's contest_code
-    column, then recalculates the summary columns. Called by
-    contest_sync.sync_one_contest() after grading is done in Postgres —
-    this is the step that actually gets numbers onto the Student_Contest
-    sheet instead of everyone staying on the default "ABS".
-
-    contest_code: str, must already be a column header (ensure_sheet_for_contest
-        creates it at contest-creation time; this also creates it as a
-        fallback if that step somehow didn't run, so a sync never silently
-        no-ops just because the column is missing).
-    results_by_user_id: {user_id(int): {"solved": int, "participated": bool,
-        "rank": int|None, "score": int}} — as built by contest_sync.py.
-        Students not in this dict, or with participated=False, are left as
-        whatever's already in their cell (ABS by default) — a 0-solve
-        result and "never attempted" both mean nothing was submitted, so
-        there's no scored value to write.
-
-    Returns (ok: bool, message: str). Never raises.
-    """
-    try:
-        sheet = get_or_create_student_contest_sheet()
-        header = _header(sheet)
-        if contest_code not in header:
-            add_contest_column(sheet, contest_code)
-            header = _header(sheet)
-
-        col_idx = _col_index(header, contest_code)
-        uid_col = _col_index(header, KEY_COLUMN)
-        all_values = sheet.get_all_values()
-        data_rows = all_values[1:]
-
-        # Build the full column top-to-bottom and write it in one call —
-        # same pattern recalculate_summary() below already uses, and it's
-        # the one both the real gspread Worksheet and the FakeWorksheet
-        # test double actually implement (unlike batch_update, which the
-        # test double doesn't have).
-        col_values = []
-        written = 0
-        for row in data_rows:
-            uid_cell = row[uid_col - 1] if len(row) >= uid_col else ""
-            existing_cell = row[col_idx - 1] if len(row) >= col_idx else ABSENT_MARKER
-            uid = None
-            if uid_cell:
-                try:
-                    uid = int(uid_cell)
-                except ValueError:
-                    uid = None
-            result = results_by_user_id.get(uid) if uid is not None else None
-            if result and result.get("participated"):
-                # Write as a string, not an int — recalculate_summary()
-                # below calls .strip() on every cell it reads back, which
-                # blows up on a raw int (caught via the FakeWorksheet smoke
-                # test; real Sheets reads back FORMATTED_VALUE strings
-                # anyway, so this matches what it'll actually see there).
-                col_values.append([str(result.get("solved", 0))])
-                written += 1
-            else:
-                # Not a participant in this sync (or no matching uid) —
-                # leave the cell exactly as it was (ABS by default).
-                col_values.append([existing_cell])
-
-        if col_values:
-            col_letter = gspread.utils.rowcol_to_a1(1, col_idx).rstrip("0123456789")
-            cell_range = f"{col_letter}2:{col_letter}{1 + len(col_values)}"
-            sheet.update(cell_range, col_values, value_input_option="USER_ENTERED")
-
-        recalculate_summary(sheet)
-        return True, f"{written} result(s) written to sheet."
-    except Exception as e:
-        return False, f"Google Sheet write failed: {e}"
 
 
 def refresh_sheet():

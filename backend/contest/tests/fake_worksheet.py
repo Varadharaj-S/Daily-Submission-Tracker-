@@ -33,36 +33,22 @@ class FakeWorksheet:
         for r in rows:
             self.rows.append(list(r))
 
-    def insert_row(self, values, index):
-        """1-based index, mirrors gspread's insert_row."""
-        self.rows.insert(index - 1, list(values))
-
     def insert_cols(self, values, col):
-        """Mirrors real gspread's insert_cols: `values` is "a list of col
-        lists" — each inner list holds ONE COLUMN's values top-to-bottom
-        (row 0 first), not one inner list per row. Inserts len(values) new
-        columns starting at 1-based index `col`."""
-        idx = col - 1  # 0-based start column
-        for col_offset, col_values in enumerate(values):
-            insert_at = idx + col_offset
-            for row_i in range(len(self.rows)):
-                v = col_values[row_i] if row_i < len(col_values) else ""
-                row = self.rows[row_i]
-                while len(row) < insert_at:
-                    row.append("")
-                row.insert(insert_at, v)
+        """values: list of [v] (one value per row, header first). col: 1-based
+        insertion index — mirrors gspread's insert_cols semantics."""
+        idx = col - 1  # 0-based
+        for i in range(len(self.rows)):
+            v = values[i][0] if i < len(values) else ""
+            row = self.rows[i]
+            while len(row) < idx:
+                row.append("")
+            row.insert(idx, v)
 
     def update(self, cell_range, values, value_input_option=None):
         m = re.match(r"([A-Z]+)(\d+):([A-Z]+)(\d+)", cell_range)
-        if not m:
-            # single-cell range, e.g. "C3" (used by batch_update below)
-            m2 = re.match(r"([A-Z]+)(\d+)", cell_range)
-            assert m2, f"bad range: {cell_range}"
-            start_col = self._col_to_idx(m2.group(1))
-            start_row = int(m2.group(2))
-        else:
-            start_col = self._col_to_idx(m.group(1))
-            start_row = int(m.group(2))
+        assert m, f"bad range: {cell_range}"
+        start_col = self._col_to_idx(m.group(1))
+        start_row = int(m.group(2))
         for i, row_values in enumerate(values):
             r = start_row - 1 + i
             while len(self.rows) <= r:
@@ -73,11 +59,6 @@ class FakeWorksheet:
                 while len(row) <= c:
                     row.append("")
                 row[c] = v
-
-    def batch_update(self, data, value_input_option=None):
-        """Mirrors gspread's batch_update([{"range": "C3", "values": [[v]]}, ...])."""
-        for item in data:
-            self.update(item["range"], item["values"], value_input_option)
 
     @staticmethod
     def _col_to_idx(letters):

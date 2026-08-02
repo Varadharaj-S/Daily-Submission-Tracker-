@@ -40,25 +40,3 @@ def cron_daily_sync():
     run_daily_sync()
 
     return jsonify({"ok": True, "message": "Daily sync completed"})
-
-
-@app.route("/api/cron/contest-sync", methods=["GET", "POST"])
-def cron_contest_sync():
-    """Vercel Cron endpoint — grades Completed+unsynced contests.
-    Configure in vercel.json: {"path": "/api/cron/contest-sync", "schedule": "*/5 * * * *"}
-    """
-    secret = os.environ.get("CRON_SECRET", "")
-    if secret:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header != f"Bearer {secret}":
-            return jsonify({"ok": False, "message": "Unauthorized"}), 401
-
-    from contest.contest_sync import run_due_contests
-    results = run_due_contests()
-
-    return jsonify({
-        "ok": True,
-        "synced": len([r for r in results if r[1]]),
-        "failed": len([r for r in results if not r[1]]),
-        "results": [{"code": r[0], "ok": r[1], "msg": r[2]} for r in results],
-    })

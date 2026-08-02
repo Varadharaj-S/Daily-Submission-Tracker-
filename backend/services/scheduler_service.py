@@ -1,75 +1,37 @@
 """
-services/scheduler_service.py — per-user auto-sync scheduling.
-Moved verbatim from app.py.
+services/contest_scheduler_service.py — in-process contest-sync loop.
 
-`run_scheduler()` is the loop app.py used to start in a background thread
-on boot; `schedule_user()` is a per-user variant that isn't currently
-wired to any caller in the original app.py either (it was dead code there
-too) but is preserved as-is rather than dropped during the move.
+Same idea as services/scheduler_service.py's run_scheduler() (per-user daily
+sync), but for contest results, and on a 5-minute cadence instead of daily.
+
+This is a *safety net*, not the primary mechanism — contest_scheduler.py run
+via Render Cron every 5 minutes is the reliable, dedicated-process way to
+run this in production (see that file's docstring). This loop covers
+deployments that only run the web service and never set up the cron job.
+Both are safe to run at once: contest_sync.py's atomic per-contest claim
+means only one of them ever actually processes a given contest, no matter
+how many gunicorn workers or cron ticks overlap.
 """
 
 import time
-from datetime import datetime, timedelta
 
-from database.db import get_db
-from services.sync_engine import sync_user_data
+from config import Config
+
+TICK_SECONDS = Config.CONTEST_SYNC_INTERVAL_MINUTES * 60
 
 
-def schedule_user(u):
+def run_contest_scheduler():
+    from contest.contest_sync import run_due_contests
+
+    # Wait one full tick before the first run — otherwise every dev-server
+    # restart (Flask's reloader restarts on every file save) immediately
+    # re-fires a sync attempt against whatever contest is currently
+    # failing, which is what was flooding the console during testing.
+    time.sleep(TICK_SECONDS)
+
     while True:
-        now = datetime.now()
-
-        sync_time = u.get("sync_time")
-        if not sync_time:
-            return
-
-        target_time = datetime.strptime(sync_time, "%H:%M").replace(
-            year=now.year,
-            month=now.month,
-            day=now.day
-        )
-
-        if target_time <= now:
-            target_time += timedelta(days=1)
-
-        wait_seconds = (target_time - now).total_seconds()
-
-        print(f"⏳ {u['username']} waiting {int(wait_seconds)} sec")
-
-        time.sleep(wait_seconds)
-
-        print(f"⏰ Running auto sync for {u['username']}")
-        sync_user_data(u, get_db)
-        time.sleep(60)
-
-
-def run_scheduler():
-    while True:
-        now = datetime.now().strftime("%H:%M")
-
-        with get_db() as db:
-            users = db.execute(
-                "SELECT * FROM users WHERE lc_imported=1 AND COALESCE(auto_sync_enabled,1)=1"
-            ).fetchall()
-
-        for u in users:
-            u = dict(u)
-
-            last_run = u.get("last_sync", "")
-
-            if last_run:
-                last_run = last_run[-5:]  # HH:MM only
-
-            if u.get("sync_time") == now and last_run != now:
-                print(f"⏰ Running auto sync for {u['username']}")
-
-                sync_user_data(u, get_db)
-
-                with get_db() as db:
-                    db.execute(
-                        "UPDATE users SET last_sync=? WHERE id=?",
-                        (datetime.now().strftime("%Y-%m-%d %H:%M"), u["id"])
-                    )
-                    db.commit()
-
-        time.sleep(60)  # THIS MUST ALIGN WITH while
+        try:
+            run_due_contests()
+        except Exception as e:
+            print(f"[contest_scheduler_service] tick failed: {e}")
+        time.sleep(TICK_SECONDS)

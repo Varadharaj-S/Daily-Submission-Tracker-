@@ -1,7 +1,9 @@
 """
-routes/contest.py — the /student_contest dashboard, contest create/edit/
-delete, /contest/history, and (Phase 3) the problem list + sync routes.
-Status is computed live from date/time (see contest.contest_utils.compute_status).
+routes/contest.py — Phase 1 of the Contest Tracker: the /student_contest
+dashboard, contest create/edit/delete, and /contest/history. No Google
+Sheets integration (Phase 2) and no platform sync (Phase 3) yet — status
+is computed live from date/time (see contest.contest_utils.compute_status),
+not driven by a scheduler, since there isn't one yet.
 
 Access note: the design doc asks for "Admin and Mentor" access, but this
 codebase doesn't actually have a separate mentor role — "Mentor Mode"
@@ -30,9 +32,6 @@ def student_contest():
     counts = {"Upcoming": 0, "Running": 0, "Completed": 0}
     for c in contests:
         counts[c["status"]] = counts.get(c["status"], 0) + 1
-        # Enrich each contest with problem count so the dashboard can
-        # show "Problems: 2" and warn when a Completed contest has none.
-        c["problem_count"] = len(contest_service.get_contest_problems(c["id"]))
 
     return render_template(
         "contest_dashboard.html",
@@ -147,82 +146,4 @@ def contest_refresh_sheet():
     ok, msg = contest_sheet.refresh_sheet()
     flash(msg, "success" if ok else "error")
     log_admin("refresh_contest_sheet", details=msg)
-    return redirect(url_for("student_contest"))
-
-
-# ── Phase 3: problem list + sync ─────────────────────────────────────────────
-
-@app.route("/contest/problems/<int:cid>", methods=["GET"])
-@login_required
-@admin_required
-def contest_problems(cid):
-    c = contest_service.get_contest(cid)
-    if not c:
-        flash("Contest not found.", "error")
-        return redirect(url_for("student_contest"))
-    problems = contest_service.get_contest_problems(cid)
-    return render_template("contest_problems.html", contest=c, problems=problems)
-
-
-@app.route("/contest/problems/<int:cid>/add", methods=["POST"])
-@login_required
-@admin_required
-def contest_add_problem(cid):
-    c = contest_service.get_contest(cid)
-    if not c:
-        flash("Contest not found.", "error")
-        return redirect(url_for("student_contest"))
-
-    from contest.contest_utils import normalize_problem_code
-    problem_id = normalize_problem_code(sanitize(request.form.get("problem_id", ""), 120))
-    platform = request.form.get("platform") or c["platform"]
-
-    if not problem_id:
-        flash("Problem code is required.", "error")
-        return redirect(url_for("contest_problems", cid=cid))
-
-    added = contest_service.add_problem_to_contest(cid, problem_id, platform)
-    if added:
-        flash(f"Problem '{problem_id}' added.", "success")
-        log_admin("contest_add_problem", target=c["contest_code"], details=f"{platform}:{problem_id}")
-    else:
-        flash(f"Problem '{problem_id}' is already in this contest.", "warning")
-    return redirect(url_for("contest_problems", cid=cid))
-
-
-@app.route("/contest/problems/<int:cid>/remove", methods=["POST"])
-@login_required
-@admin_required
-def contest_remove_problem(cid):
-    c = contest_service.get_contest(cid)
-    if not c:
-        flash("Contest not found.", "error")
-        return redirect(url_for("student_contest"))
-
-    problem_id = request.form.get("problem_id", "")
-    contest_service.remove_problem_from_contest(cid, problem_id)
-    log_admin("contest_remove_problem", target=c["contest_code"], details=problem_id)
-    flash(f"Problem '{problem_id}' removed.", "success")
-    return redirect(url_for("contest_problems", cid=cid))
-
-
-@app.route("/contest/sync_now/<int:cid>", methods=["POST"])
-@login_required
-@admin_required
-def contest_sync_now(cid):
-    """Admin 'Sync Now' button — grades one contest immediately instead of
-    waiting for the next scheduler tick. force_resync() first so this also
-    works as a manual retry on a contest that already failed/gave up."""
-    c = contest_service.get_contest(cid)
-    if not c:
-        flash("Contest not found.", "error")
-        return redirect(url_for("student_contest"))
-
-    contest_service.force_resync(cid)
-    c = contest_service.get_contest(cid)  # re-fetch: synced/sync_attempts just got reset
-
-    from contest.contest_sync import sync_one_contest
-    ok, msg = sync_one_contest(c)
-    log_admin("contest_sync_now", target=c["contest_code"], details=msg)
-    flash(msg, "success" if ok else "error")
     return redirect(url_for("student_contest"))

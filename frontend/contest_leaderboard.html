@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Contest Leaderboard – DSA Tracker{% endblock %}
+{% block head %}
+<style>
+  .section-card{background:var(--bg2);border:1px solid var(--border);border-radius:18px;padding:1rem;box-shadow:var(--shadow)}
+  .table-wrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:.55rem .7rem;border-bottom:1px solid var(--border2);text-align:left}
+  th{font-size:.78rem;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+  td{font-size:.9rem}
+  .rank-1{color:#fbbf24;font-weight:800}
+  .rank-2{color:#cbd5e1;font-weight:800}
+  .rank-3{color:#d97706;font-weight:800}
+  .empty-state{text-align:center;padding:2.5rem 1rem;color:var(--muted)}
+</style>
+{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h2>🏆 Contest Leaderboard</h2>
+    <p class="page-sub">Total problems solved across every synced contest.</p>
+  </div>
+  <a href="{{ url_for('student_contest') }}" class="btn btn-outline">← Student Contest</a>
+</div>
+
+<div class="section-card">
+  {% if rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>#</th><th>Student</th><th>Total Solved</th><th>Contests Attended</th></tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="{{ 'rank-1' if loop.index==1 else 'rank-2' if loop.index==2 else 'rank-3' if loop.index==3 else '' }}">{{ loop.index }}</td>
+          <td>{{ r.full_name or r.username }}</td>
+          <td>{{ r.total_solved }}</td>
+          <td>{{ r.contests_attended }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">No contest results yet. Once a contest ends and syncs, students will show up here.</div>
+  {% endif %}
+</div>
+{% endblock %}

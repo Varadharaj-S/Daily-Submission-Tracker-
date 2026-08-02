@@ -57,7 +57,7 @@
         <thead>
           <tr>
             <th>Contest</th><th>Code</th><th>Platform</th><th>Date</th>
-            <th>Start</th><th>End</th><th>Problems</th><th>Status</th><th>Sync</th><th></th>
+            <th>Start</th><th>End</th><th>Status</th><th></th>
           </tr>
         </thead>
         <tbody>
@@ -69,33 +69,13 @@
             <td>{{ c.contest_date }}</td>
             <td>{{ c.start_time }}</td>
             <td>{{ c.end_time }}</td>
-            <td>
-              <span class="chip" title="{{ c.problem_count }} problem(s) configured">{{ c.problem_count }}</span>
-            </td>
             <td><span class="chip status-{{ c.status|lower }}">{{ c.status }}</span></td>
             <td>
-              {% if c.synced %}
-                <span class="chip status-running">✓ Synced</span>
-              {% elif c.status == 'Completed' and c.problem_count == 0 %}
-                <span class="chip status-upcoming" title="Add problems before this can sync">⚠ No problems</span>
-              {% elif c.status != 'Completed' %}
-                <span class="chip">— not due yet</span>
-              {% else %}
-                <span class="chip status-upcoming">⏳ Pending</span>
-              {% endif %}
-            </td>
-            <td>
-              <div class="row-actions">
-                <form method="post" action="{{ url_for('contest_sync_now', cid=c.id) }}" style="display:inline">
-                  <button type="submit" class="btn btn-outline btn-sm">🔄 Sync Now</button>
-                </form>
-                <a href="{{ url_for('contest_problems', cid=c.id) }}" class="btn btn-outline btn-sm">➕ Problems</a>
-                <form method="post" action="{{ url_for('contest_delete', cid=c.id) }}"
-                      onsubmit="return confirm('Delete {{ c.contest_name }}? This also removes any saved results.');"
-                      style="display:inline">
-                  <button type="submit" class="btn btn-outline btn-sm">🗑 Delete</button>
-                </form>
-              </div>
+              <form method="post" action="{{ url_for('contest_delete', cid=c.id) }}"
+                    onsubmit="return confirm('Delete {{ c.contest_name }}? This also removes any saved results.');"
+                    style="display:inline">
+                <button type="submit" class="btn btn-outline btn-sm">🗑 Delete</button>
+              </form>
             </td>
           </tr>
           {% endfor %}
