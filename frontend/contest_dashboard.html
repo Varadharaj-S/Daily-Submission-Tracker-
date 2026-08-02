@@ -101,6 +101,7 @@ function renderContestDashboard() {
               <td>
                 <div class="row-actions">
                   <button type="button" class="btn btn-outline btn-sm" onclick="manageProblems(${c.id}, '${(c.contest_name || "").replace(/'/g, "\\'")}')">📋 Problems</button>
+                  <button type="button" class="btn btn-outline btn-sm" onclick="autoDetectProblems(${c.id}, this)">🔍 Auto-detect</button>
                   ${c.status === "Completed" ? `<button type="button" class="btn btn-outline btn-sm" onclick="syncNow(${c.id}, this)">🔄 Sync Now</button>` : ""}
                   <button type="button" class="btn btn-outline btn-sm" onclick="deleteContest(${c.id}, '${(c.contest_name || "").replace(/'/g, "\\'")}')">🗑 Delete</button>
                 </div>
@@ -163,6 +164,16 @@ async function manageProblems(cid, name) {
   }
   showToast(d2.message || (d2.success ? "Updated" : "Failed"), d2.success ? "success" : "error");
   if (d2.success) await loadContestDashboard();
+}
+
+async function autoDetectProblems(cid, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const d = await apiPostForm(`/contest/problems/${cid}/auto`, {});
+    showToast(d.message || (d.success ? "Done" : "Failed"), d.success ? "success" : "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function syncNow(cid, btn) {

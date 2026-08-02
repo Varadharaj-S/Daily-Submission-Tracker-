@@ -262,6 +262,41 @@ def get_contest_problems(contest_id):
     return [_serialize_row(dict(r)) for r in rows]
 
 
+def auto_detect_problems(contest_id):
+    """Auto-populates a contest's problem list from already-synced
+    submissions instead of requiring anyone to type problem codes by hand.
+
+    Works because AtCoder problem IDs always follow "{contest_code}_{letter}"
+    (e.g. contest 'abc466' -> problems 'abc466_a', 'abc466_b', ...) — so any
+    submission whose problem_id starts with "{contest_code}_" on this
+    contest's platform IS one of this contest's problems, full stop.
+    Codeforces/LeetCode problem IDs don't reliably carry the contest code
+    as a prefix, so this may find 0 there; 'Problems' still supports
+    manual add/remove as a fallback for those.
+
+    Returns (found: int, added: int) — found is every matching problem_id
+    seen in submissions, added is how many were new (not already on the
+    list).
+    """
+    c = get_contest(contest_id)
+    if not c:
+        return 0, 0
+    prefix = c["contest_code"].lower() + "_"
+    with get_db() as db:
+        rows = db.execute("""
+            SELECT DISTINCT problem_id FROM submissions
+            WHERE platform=? AND LOWER(problem_id) LIKE ?
+        """, (c["platform"], prefix + "%")).fetchall()
+
+    found = [r["problem_id"] for r in rows]
+    added = 0
+    for pid in found:
+        ok, _ = add_problem_to_contest(contest_id, pid, c["platform"])
+        if ok:
+            added += 1
+    return len(found), added
+
+
 def add_problem_to_contest(contest_id, problem_id, platform):
     problem_id = (problem_id or "").strip()
     if not problem_id:

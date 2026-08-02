@@ -199,6 +199,29 @@ def contest_remove_problem(cid):
     return jsonify({"success": True, "message": f"'{problem_id}' removed."})
 
 
+@app.route("/contest/problems/<int:cid>/auto", methods=["POST"])
+@login_required
+@admin_required
+def contest_auto_detect_problems(cid):
+    c = contest_service.get_contest(cid)
+    if not c:
+        return jsonify({"success": False, "message": "Contest not found."}), 404
+
+    found, added = contest_service.auto_detect_problems(cid)
+    if found == 0:
+        return jsonify({
+            "success": False,
+            "message": (f"No submissions found with problem IDs starting with "
+                        f"'{c['contest_code'].lower()}_' — this only works when problem IDs are "
+                        f"prefixed with the contest code (AtCoder's usual pattern, e.g. "
+                        f"'{c['contest_code'].lower()}_a'). Add problems manually instead."),
+        })
+
+    msg = f"Found {found} matching problem(s), added {added} new one(s). Click 'Sync Now' next."
+    log_admin("auto_detect_contest_problems", target=c["contest_code"], details=msg)
+    return jsonify({"success": True, "message": msg})
+
+
 @app.route("/contest/sync_now/<int:cid>", methods=["POST"])
 @login_required
 @admin_required
