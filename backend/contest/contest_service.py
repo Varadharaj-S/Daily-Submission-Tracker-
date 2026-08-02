@@ -112,10 +112,18 @@ def ensure_contest_schema():
         CREATE TABLE IF NOT EXISTS contest_problems (
             id          SERIAL  PRIMARY KEY,
             contest_id  INTEGER NOT NULL REFERENCES contest_events(id) ON DELETE CASCADE,
-            problem_id  TEXT    NOT NULL,
-            platform    TEXT    NOT NULL,
-            added_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+            problem_id  TEXT    NOT NULL
         );
+        -- Explicit ALTER TABLE ADD COLUMN IF NOT EXISTS, not just relying on
+        -- CREATE TABLE IF NOT EXISTS above: that clause is a no-op the
+        -- moment a contest_problems table already exists in ANY shape, so
+        -- if an earlier deploy left one behind missing these columns (which
+        -- is exactly what "column added_at does not exist" meant), the
+        -- CREATE TABLE line alone would never fix it. This runs every
+        -- startup and actually patches an existing table, same self-healing
+        -- pattern as the contest_events ALTERs above.
+        ALTER TABLE contest_problems ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT '';
+        ALTER TABLE contest_problems ADD COLUMN IF NOT EXISTS added_at TIMESTAMPTZ NOT NULL DEFAULT now();
         CREATE UNIQUE INDEX IF NOT EXISTS idx_contest_problems_unique
             ON contest_problems(contest_id, problem_id);
         CREATE INDEX IF NOT EXISTS idx_contest_problems_contest
