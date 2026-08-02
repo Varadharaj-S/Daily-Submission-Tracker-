@@ -24,9 +24,18 @@ import os
 from extensions import app
 from database.db import init_db
 from services.tracker_service import ensure_tracker_schema
+from contest.contest_service import ensure_contest_schema
 
 # ── DB (PostgreSQL only — see database/db.py) ────────────────────────────────
 init_db()
+
+# contest_events/contest_results/contest_problems are NOT part of init_db()'s
+# baseline schema — they were added later via database/migrate.py, a
+# standalone script nobody runs against the Vercel production DB automatically.
+# That's why /student_contest was 500ing: the table just doesn't exist there.
+# Calling this here (unconditionally, like init_db() above) means it now runs
+# on every cold start, including under wsgi.py/gunicorn on Vercel.
+ensure_contest_schema()
 
 # ── Route modules (import for side-effect route registration) ───────────────
 from routes import auth            # noqa: E402,F401  /, /login, /signup, /logout, /admin/login, email verification

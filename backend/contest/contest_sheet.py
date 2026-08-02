@@ -218,6 +218,54 @@ def ensure_sheet_for_contest(contest):
         return False, f"Google Sheet sync failed: {e}"
 
 
+def write_contest_results(contest_code, results_by_user_id):
+    """Writes each participant's solved count into the contest's column
+    (matched by the hidden _user_id column), then recalculates the summary
+    columns. Anyone in results_by_user_id who didn't solve anything
+    (participated=False) is written as ABS, same marker as a student who
+    was never touched at all — there's no separate "attempted, solved
+    zero" signal in this design (see contest_sync.py's module docstring).
+
+    results_by_user_id: {user_id (int): {"solved": int, "participated": bool, ...}}
+
+    Returns (ok: bool, message: str). Never raises — same non-fatal
+    contract as ensure_sheet_for_contest()/refresh_sheet() above.
+    """
+    try:
+        sheet = get_or_create_student_contest_sheet()
+        header = _header(sheet)
+        col_idx = _col_index(header, contest_code)
+        if not col_idx:
+            return False, (f"Contest column '{contest_code}' not found on the sheet — "
+                            f"the contest column gets created when the contest is made; "
+                            f"try 'Refresh Sheet' first.")
+
+        all_values = sheet.get_all_values()
+        uid_col = _col_index(header, KEY_COLUMN) - 1  # 0-based
+
+        cells = []
+        for row_num, row in enumerate(all_values[1:], start=2):
+            if len(row) <= uid_col:
+                continue
+            uid_raw = row[uid_col]
+            if not uid_raw or not uid_raw.isdigit():
+                continue
+            uid = int(uid_raw)
+            if uid not in results_by_user_id:
+                continue
+            r = results_by_user_id[uid]
+            value = r["solved"] if r.get("participated") else ABSENT_MARKER
+            cells.append(gspread.Cell(row_num, col_idx, value))
+
+        if cells:
+            sheet.update_cells(cells, value_input_option="USER_ENTERED")
+
+        recalculate_summary(sheet)
+        return True, f"{len(cells)} result(s) written to the sheet."
+    except Exception as e:
+        return False, f"Google Sheet result write failed: {e}"
+
+
 def refresh_sheet():
     """Re-import students and recalculate summary columns without adding a
     contest column — used by an admin 'Refresh Sheet' action."""

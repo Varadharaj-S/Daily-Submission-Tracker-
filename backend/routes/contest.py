@@ -22,6 +22,7 @@ from utils.decorators import login_required, admin_required, log_admin
 from utils.security import sanitize
 from contest import contest_service
 from contest import contest_sheet
+from contest import contest_sync
 
 
 # PART 5 (frontend/backend split): this module was never migrated when the
@@ -147,4 +148,74 @@ def contest_history():
 def contest_refresh_sheet():
     ok, msg = contest_sheet.refresh_sheet()
     log_admin("refresh_contest_sheet", details=msg)
+    return jsonify({"success": ok, "message": msg})
+
+
+# ── Phase 3: problem list + manual sync ──────────────────────────────────
+# WHY RESULTS NEVER REACHED THE SHEET: grading needs to know which problem
+# IDs belong to a contest (contest_problems) to check submissions against —
+# there was never a UI or route to add any, so every contest's problem
+# list was permanently empty, and there was no route to trigger a sync at
+# all (the only trigger, contest_scheduler.py via Render Cron, doesn't run
+# on this app's actual Vercel deployment). Both gaps are filled below.
+
+@app.route("/contest/problems/<int:cid>")
+@login_required
+@admin_required
+def contest_problems(cid):
+    c = contest_service.get_contest(cid)
+    if not c:
+        return jsonify({"success": False, "message": "Contest not found."}), 404
+    return jsonify({"problems": contest_service.get_contest_problems(cid)})
+
+
+@app.route("/contest/problems/<int:cid>/add", methods=["POST"])
+@login_required
+@admin_required
+def contest_add_problem(cid):
+    c = contest_service.get_contest(cid)
+    if not c:
+        return jsonify({"success": False, "message": "Contest not found."}), 404
+
+    problem_id = sanitize(request.form.get("problem_id", ""), 64)
+    platform = request.form.get("platform") or c["platform"]
+    ok, msg = contest_service.add_problem_to_contest(cid, problem_id, platform)
+    if ok:
+        log_admin("add_contest_problem", target=c["contest_code"], details=problem_id)
+    return jsonify({"success": ok, "message": msg})
+
+
+@app.route("/contest/problems/<int:cid>/remove", methods=["POST"])
+@login_required
+@admin_required
+def contest_remove_problem(cid):
+    c = contest_service.get_contest(cid)
+    if not c:
+        return jsonify({"success": False, "message": "Contest not found."}), 404
+
+    problem_id = request.form.get("problem_id", "")
+    contest_service.remove_problem_from_contest(cid, problem_id)
+    log_admin("remove_contest_problem", target=c["contest_code"], details=problem_id)
+    return jsonify({"success": True, "message": f"'{problem_id}' removed."})
+
+
+@app.route("/contest/sync_now/<int:cid>", methods=["POST"])
+@login_required
+@admin_required
+def contest_sync_now(cid):
+    c = contest_service.get_contest(cid)
+    if not c:
+        return jsonify({"success": False, "message": "Contest not found."}), 404
+    if c["status"] != "Completed":
+        return jsonify({
+            "success": False,
+            "message": f"Contest is still '{c['status']}' — grading runs once it's Completed.",
+        }), 400
+
+    # force_resync clears any stale claim/attempt-count so this manual
+    # click always actually runs, instead of "Could not claim contest
+    # (already synced)" if it was already marked synced from a prior try.
+    contest_service.force_resync(cid)
+    ok, msg = contest_sync.sync_one_contest(contest_service.get_contest(cid))
+    log_admin("contest_sync_now", target=c["contest_code"], details=msg)
     return jsonify({"success": ok, "message": msg})

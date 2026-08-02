@@ -28,6 +28,11 @@
   .chip.status-upcoming{background:rgba(251,191,36,.12);color:#fbbf24}
   .chip.status-running{background:rgba(16,185,129,.12);color:#34d399}
   .chip.status-completed{background:rgba(148,163,184,.12);color:#94a3b8}
+  .chip.sync-ok{background:rgba(16,185,129,.12);color:#34d399}
+  .chip.sync-error{background:rgba(248,113,113,.12);color:#f87171}
+  .chip.sync-pending{background:rgba(148,163,184,.12);color:#94a3b8}
+  .sync-cell{display:flex;flex-direction:column;gap:.3rem;min-width:150px}
+  .sync-cell small{color:var(--muted);font-size:.72rem}
   .row-actions{display:flex;gap:.4rem;flex-wrap:wrap}
   .empty-state{text-align:center;padding:2.5rem 1rem;color:var(--muted)}
 </style>
@@ -79,7 +84,7 @@ function renderContestDashboard() {
           <thead>
             <tr>
               <th>Contest</th><th>Code</th><th>Platform</th><th>Date</th>
-              <th>Start</th><th>End</th><th>Status</th><th></th>
+              <th>Start</th><th>End</th><th>Status</th><th>Sync</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -92,8 +97,13 @@ function renderContestDashboard() {
               <td>${c.start_time}</td>
               <td>${c.end_time}</td>
               <td><span class="chip status-${(c.status || "").toLowerCase()}">${c.status}</span></td>
+              <td>${syncCell(c)}</td>
               <td>
-                <button type="button" class="btn btn-outline btn-sm" onclick="deleteContest(${c.id}, '${(c.contest_name || "").replace(/'/g, "\\'")}')">🗑 Delete</button>
+                <div class="row-actions">
+                  <button type="button" class="btn btn-outline btn-sm" onclick="manageProblems(${c.id}, '${(c.contest_name || "").replace(/'/g, "\\'")}')">📋 Problems</button>
+                  ${c.status === "Completed" ? `<button type="button" class="btn btn-outline btn-sm" onclick="syncNow(${c.id}, this)">🔄 Sync Now</button>` : ""}
+                  <button type="button" class="btn btn-outline btn-sm" onclick="deleteContest(${c.id}, '${(c.contest_name || "").replace(/'/g, "\\'")}')">🗑 Delete</button>
+                </div>
               </td>
             </tr>`).join("")}
           </tbody>
@@ -107,6 +117,20 @@ function renderContestDashboard() {
   </div>`;
 }
 
+function syncCell(c) {
+  if (c.status !== "Completed") {
+    return `<div class="sync-cell"><span class="chip sync-pending">— not due yet</span></div>`;
+  }
+  if (c.synced) {
+    const when = c.last_synced_at ? new Date(c.last_synced_at).toLocaleString() : "";
+    return `<div class="sync-cell"><span class="chip sync-ok">✅ Synced</span><small>${when}</small></div>`;
+  }
+  if (c.last_sync_error) {
+    return `<div class="sync-cell"><span class="chip sync-error">⚠️ Failed</span><small title="${c.last_sync_error.replace(/"/g, "&quot;")}">${c.last_sync_error.slice(0, 60)}${c.last_sync_error.length > 60 ? "…" : ""}</small></div>`;
+  }
+  return `<div class="sync-cell"><span class="chip sync-pending">⏳ Not synced yet</span><small>Click Sync Now</small></div>`;
+}
+
 async function loadContestDashboard() {
   CONTESTS_DATA = await apiGet("/student_contest");
   renderContestDashboard();
@@ -117,6 +141,39 @@ async function deleteContest(cid, name) {
   const d = await apiPostForm(`/contest/delete/${cid}`, {});
   showToast(d.message || (d.success ? "Deleted" : "Failed"), d.success ? "success" : "error");
   if (d.success) await loadContestDashboard();
+}
+
+async function manageProblems(cid, name) {
+  const d = await apiGet(`/contest/problems/${cid}`);
+  const list = d.problems || [];
+  const current = list.length ? list.map(p => p.problem_id).join(", ") : "(none yet)";
+  const input = prompt(
+    `Problems for "${name}"\nCurrent: ${current}\n\n` +
+    `Grading checks a student's already-synced submissions against these problem IDs/codes ` +
+    `during the contest's time window — add every problem before syncing.\n\n` +
+    `Type a problem ID/code to ADD it, or "remove:<code>" to remove one, then OK.`
+  );
+  if (!input) return;
+  const trimmed = input.trim();
+  let d2;
+  if (trimmed.toLowerCase().startsWith("remove:")) {
+    d2 = await apiPostForm(`/contest/problems/${cid}/remove`, { problem_id: trimmed.slice(7).trim() });
+  } else {
+    d2 = await apiPostForm(`/contest/problems/${cid}/add`, { problem_id: trimmed });
+  }
+  showToast(d2.message || (d2.success ? "Updated" : "Failed"), d2.success ? "success" : "error");
+  if (d2.success) await loadContestDashboard();
+}
+
+async function syncNow(cid, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const d = await apiPostForm(`/contest/sync_now/${cid}`, {});
+    showToast(d.message || (d.success ? "Synced" : "Sync failed"), d.success ? "success" : "error");
+    await loadContestDashboard();
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function refreshSheet() {

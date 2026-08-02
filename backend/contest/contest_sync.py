@@ -211,7 +211,8 @@ def sync_one_contest(contest):
         with get_db() as db:
             db.execute("""
                 UPDATE contest_events
-                SET synced=TRUE, sync_attempts=?, last_sync_error=?, sync_claimed_at=NULL
+                SET synced=TRUE, sync_attempts=?, last_sync_error=?, sync_claimed_at=NULL,
+                    last_synced_at=now()
                 WHERE id=?
             """, (attempts, "" if sheet_ok else sheet_msg, contest_id))
             db.commit()
