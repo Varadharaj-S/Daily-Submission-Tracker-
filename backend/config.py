@@ -42,7 +42,15 @@ class Config:
         if o.strip()
     ]
 
-    SESSION_COOKIE_SAMESITE = os.environ.get("SESSION_COOKIE_SAMESITE", "None")
+    # PART 6 update: frontend/_redirects now proxies /api/* through the
+    # Cloudflare frontend domain to this backend, so in production the
+    # cookie is first-party (same-site) again — no more SameSite=None
+    # needed, which is what let Safari/Brave/strict-Firefox silently drop
+    # the login cookie for some visitors. Default is now "Lax". If you're
+    # running the frontend locally on localhost WITHOUT the Cloudflare
+    # proxy in front of it (calling this backend directly, cross-site),
+    # set SESSION_COOKIE_SAMESITE=None in your local .env for that case.
+    SESSION_COOKIE_SAMESITE = os.environ.get("SESSION_COOKIE_SAMESITE", "Lax")
     SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "true").lower() == "true"
     SESSION_COOKIE_HTTPONLY = True
 
