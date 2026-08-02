@@ -235,10 +235,21 @@ def contest_sync_now(cid):
             "message": f"Contest is still '{c['status']}' — grading runs once it's Completed.",
         }), 400
 
+    # Auto-detect first if nothing's configured yet — "Sync Now" should be
+    # the one button that does everything (detect problems from already-
+    # synced submissions, grade, write to sheet), not force a separate
+    # manual "add problems" step before it'll do anything at all.
+    auto_msg = ""
+    if not contest_service.get_contest_problems(cid):
+        found, added = contest_service.auto_detect_problems(cid)
+        if added:
+            auto_msg = f"Auto-detected {added} problem(s) from submissions. "
+
     # force_resync clears any stale claim/attempt-count so this manual
     # click always actually runs, instead of "Could not claim contest
     # (already synced)" if it was already marked synced from a prior try.
     contest_service.force_resync(cid)
     ok, msg = contest_sync.sync_one_contest(contest_service.get_contest(cid))
-    log_admin("contest_sync_now", target=c["contest_code"], details=msg)
-    return jsonify({"success": ok, "message": msg})
+    full_msg = auto_msg + msg
+    log_admin("contest_sync_now", target=c["contest_code"], details=full_msg)
+    return jsonify({"success": ok, "message": full_msg})
