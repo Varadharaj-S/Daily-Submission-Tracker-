@@ -138,7 +138,17 @@ def add_contest_column(sheet, contest_code):
     so the three summary columns always stay rightmost. Every existing
     student row is initialized to ABS in the new column (design doc:
     'Initialize all students as ABS'). No-op (returns False) if the column
-    already exists — this makes re-running contest creation safe."""
+    already exists — this makes re-running contest creation safe.
+
+    BUG FIXED HERE: gspread's insert_cols(values, col) treats the OUTER
+    list as "one entry per column to insert", with each INNER list being
+    that column's values top-to-bottom. The previous version built
+    [[contest_code], [ABS], [ABS], ...] — a list of N+1 separate one-row
+    columns — instead of [[contest_code, ABS, ABS, ...]], ONE column with
+    N+1 rows. That inserted a wall of stray single-cell "ABS" columns
+    across row 1 (visible in the live sheet) instead of one abc466 column
+    running down every student's row.
+    """
     header = _header(sheet)
     if contest_code in header:
         return False
@@ -147,7 +157,7 @@ def add_contest_column(sheet, contest_code):
     all_values = sheet.get_all_values()
     num_data_rows = max(len(all_values) - 1, 0)
 
-    column_values = [[contest_code]] + [[ABSENT_MARKER] for _ in range(num_data_rows)]
+    column_values = [[contest_code] + [ABSENT_MARKER] * num_data_rows]  # ONE column, N+1 rows
     sheet.insert_cols(column_values, total_solved_idx)
     return True
 
@@ -207,6 +217,7 @@ def ensure_sheet_for_contest(contest):
     """
     try:
         sheet = get_or_create_student_contest_sheet()
+        repair_stray_columns(sheet)
         added = import_students(sheet)
         created_col = add_contest_column(sheet, contest["contest_code"])
         if created_col:
@@ -266,13 +277,41 @@ def write_contest_results(contest_code, results_by_user_id):
         return False, f"Google Sheet result write failed: {e}"
 
 
+def repair_stray_columns(sheet):
+    """One-time cleanup for the insert_cols() bug fixed above in
+    add_contest_column(): every junk column it created is headed literally
+    'ABS' (the marker itself — a real contest column is always headed by
+    a contest_code like 'abc466', never by ABSENT_MARKER), and holds a
+    value only in row 1 since each was its own one-row column. Detects and
+    deletes every such column in the contest-code range. Safe against ever
+    touching real data, since a genuine contest column can never be named
+    exactly 'ABS'. Returns the number of columns removed."""
+    header = _header(sheet)
+    start = len(BASE_COLUMNS)
+    end = header.index("Total Solved") if "Total Solved" in header else len(header)
+    junk_positions = [i for i in range(start, end) if header[i] == ABSENT_MARKER]
+    if not junk_positions:
+        return 0
+    # Delete rightmost-first so earlier indices in the list stay valid as
+    # columns shift left after each deletion.
+    for idx in sorted(junk_positions, reverse=True):
+        sheet.delete_columns(idx + 1)  # gspread column indices are 1-based
+    return len(junk_positions)
+
+
 def refresh_sheet():
-    """Re-import students and recalculate summary columns without adding a
-    contest column — used by an admin 'Refresh Sheet' action."""
+    """Re-import students, clean up any stray junk columns from the
+    insert_cols() bug, and recalculate summary columns — used by an
+    admin's 'Refresh Sheet' action."""
     try:
         sheet = get_or_create_student_contest_sheet()
+        removed = repair_stray_columns(sheet)
         added = import_students(sheet)
         recalculate_summary(sheet)
-        return True, f"Sheet refreshed ({added} new student(s) imported)."
+        msg = f"Sheet refreshed ({added} new student(s) imported"
+        if removed:
+            msg += f", {removed} stray column(s) from an earlier bug removed"
+        msg += ")."
+        return True, msg
     except Exception as e:
         return False, f"Google Sheet refresh failed: {e}"
