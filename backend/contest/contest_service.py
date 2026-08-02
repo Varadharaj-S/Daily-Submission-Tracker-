@@ -39,21 +39,6 @@ def create_contest(contest_name, contest_code, platform, contest_date,
     return row, None
 
 
-def _serialize_contest(d):
-    """Convert date/time objects → strings so jsonify() works."""
-    import datetime
-    for k in ("contest_date", "start_time", "end_time",
-              "created_at", "updated_at", "last_attempt_at", "sync_claimed_at"):
-        v = d.get(k)
-        if isinstance(v, datetime.datetime):
-            d[k] = v.strftime("%Y-%m-%d %H:%M:%S")
-        elif isinstance(v, datetime.date):
-            d[k] = v.strftime("%Y-%m-%d")
-        elif isinstance(v, datetime.time):
-            d[k] = v.strftime("%H:%M")
-    return d
-
-
 def list_contests(status=None):
     """Returns all contests, freshest first, with status recomputed live
     (not trusted from the stored column — see contest_utils.compute_status)."""
@@ -64,7 +49,7 @@ def list_contests(status=None):
 
     contests = []
     for r in rows:
-        d = _serialize_contest(dict(r))
+        d = dict(r)
         d["status"] = compute_status(d["contest_date"], d["start_time"], d["end_time"])
         contests.append(d)
 
@@ -78,7 +63,7 @@ def get_contest(contest_id):
         row = db.execute("SELECT * FROM contest_events WHERE id=?", (contest_id,)).fetchone()
     if not row:
         return None
-    d = _serialize_contest(dict(row))
+    d = dict(row)
     d["status"] = compute_status(d["contest_date"], d["start_time"], d["end_time"])
     return d
 
@@ -121,11 +106,17 @@ def sync_status_column(contest_id):
         db.commit()
 
 
-# ── Phase 3 additions: sync support ──────────────────────────────────────────
+# ── Phase 3 additions: sync + problem-list support ───────────────────────────
+# These are the functions contest/contest_sync.py already imports and calls
+# (get_due_contests, get_contest_problems) — they never actually existed in
+# this file, so every sync attempt (scheduled or "Sync Now") was failing
+# immediately with an AttributeError before it ever reached the grading
+# logic. That's the real root cause of contests staying stuck on "Pending".
 
 def get_due_contests():
     """Returns all Completed-but-unsynced contests (synced=FALSE) that
-    haven't exceeded MAX_SYNC_ATTEMPTS. Called by contest_sync.run_due_contests()."""
+    haven't exceeded MAX_SYNC_ATTEMPTS. Called by contest_sync.run_due_contests()
+    on the scheduler tick."""
     with get_db() as db:
         rows = db.execute("""
             SELECT * FROM contest_events
@@ -143,42 +134,37 @@ def get_due_contests():
 
 
 def get_contest_problems(contest_id):
-    """Returns list of {problem_id, platform} for a contest.
-    problem_id = the platform's own identifier (e.g. CF problem code,
-    LC title slug, AC problem id) — used by contest_sync to intersect
-    with the submissions table."""
+    """Returns [{problem_id, platform}, ...] for a contest — the live
+    contest_problems table's actual columns (contest_id, problem_id,
+    platform), matching what contest_sync.py expects."""
     with get_db() as db:
         rows = db.execute("""
             SELECT problem_id, platform
             FROM contest_problems
             WHERE contest_id = ?
+            ORDER BY problem_id
         """, (contest_id,)).fetchall()
     return [dict(r) for r in rows]
 
 
-def force_resync(contest_id):
-    """Resets synced=FALSE and sync_attempts=0 so the next scheduler tick
-    (or an admin's 'Sync Now') retries the contest from scratch."""
-    with get_db() as db:
-        db.execute("""
-            UPDATE contest_events
-            SET synced=FALSE, sync_attempts=0, last_sync_error=NULL,
-                sync_claimed_at=NULL
-            WHERE id=?
-        """, (contest_id,))
-        db.commit()
-
-
 def add_problem_to_contest(contest_id, problem_id, platform):
-    """Adds a problem to a contest's problem list (contest_problems table).
-    Idempotent — silently ignores duplicates."""
+    """Adds one problem to a contest's grading list. Idempotent — if the
+    same problem_id is added twice for this contest, the second call is a
+    no-op (checked explicitly rather than relying on ON CONFLICT, since
+    there's no confirmed unique constraint on (contest_id, problem_id) in
+    the live schema)."""
     with get_db() as db:
+        existing = db.execute("""
+            SELECT id FROM contest_problems WHERE contest_id=? AND problem_id=?
+        """, (contest_id, problem_id)).fetchone()
+        if existing:
+            return False
         db.execute("""
             INSERT INTO contest_problems (contest_id, problem_id, platform)
             VALUES (?, ?, ?)
-            ON CONFLICT (contest_id, problem_id) DO NOTHING
         """, (contest_id, problem_id, platform))
         db.commit()
+    return True
 
 
 def remove_problem_from_contest(contest_id, problem_id):
@@ -186,4 +172,17 @@ def remove_problem_from_contest(contest_id, problem_id):
         db.execute("""
             DELETE FROM contest_problems WHERE contest_id=? AND problem_id=?
         """, (contest_id, problem_id))
+        db.commit()
+
+
+def force_resync(contest_id):
+    """Resets synced=FALSE and sync_attempts=0 so the contest is retried
+    from scratch on the next scheduler tick or an admin's 'Sync Now'."""
+    with get_db() as db:
+        db.execute("""
+            UPDATE contest_events
+            SET synced=FALSE, sync_attempts=0, last_sync_error=NULL,
+                sync_claimed_at=NULL
+            WHERE id=?
+        """, (contest_id,))
         db.commit()

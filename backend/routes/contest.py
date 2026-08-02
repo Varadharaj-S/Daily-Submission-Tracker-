@@ -1,9 +1,7 @@
 """
-routes/contest.py — Phase 1 of the Contest Tracker: the /student_contest
-dashboard, contest create/edit/delete, and /contest/history. No Google
-Sheets integration (Phase 2) and no platform sync (Phase 3) yet — status
-is computed live from date/time (see contest.contest_utils.compute_status),
-not driven by a scheduler, since there isn't one yet.
+routes/contest.py — the /student_contest dashboard, contest create/edit/
+delete, /contest/history, and (Phase 3) the problem list + sync routes.
+Status is computed live from date/time (see contest.contest_utils.compute_status).
 
 Access note: the design doc asks for "Admin and Mentor" access, but this
 codebase doesn't actually have a separate mentor role — "Mentor Mode"
@@ -14,7 +12,7 @@ mentor role gets added.
 
 from datetime import datetime
 
-from flask import request, jsonify
+from flask import render_template, request, redirect, url_for, flash, jsonify
 from flask_login import current_user
 
 from extensions import app
@@ -32,12 +30,16 @@ def student_contest():
     counts = {"Upcoming": 0, "Running": 0, "Completed": 0}
     for c in contests:
         counts[c["status"]] = counts.get(c["status"], 0) + 1
+        # Enrich each contest with problem count so the dashboard can
+        # show "Problems: 2" and warn when a Completed contest has none.
+        c["problem_count"] = len(contest_service.get_contest_problems(c["id"]))
 
-    return jsonify({
-        "contests": contests,
-        "counts": counts,
-        "total_contests": len(contests),
-    })
+    return render_template(
+        "contest_dashboard.html",
+        contests=contests,
+        counts=counts,
+        total_contests=len(contests),
+    )
 
 
 @app.route("/contest/create", methods=["GET", "POST"])
@@ -53,45 +55,46 @@ def contest_create():
         end_time = request.form.get("end_time", "")
 
         if not (name and code and contest_date and start_time and end_time):
-            return jsonify({"success": False, "message": "All fields are required."}), 400
+            flash("All fields are required.", "error")
+            return redirect(url_for("contest_create"))
 
         if platform not in ("Codeforces", "LeetCode", "AtCoder"):
-            return jsonify({"success": False, "message": "Invalid platform."}), 400
+            flash("Invalid platform.", "error")
+            return redirect(url_for("contest_create"))
 
         try:
             datetime.strptime(contest_date, "%Y-%m-%d")
             datetime.strptime(start_time, "%H:%M")
             datetime.strptime(end_time, "%H:%M")
         except ValueError:
-            return jsonify({"success": False, "message": "Invalid date or time format."}), 400
+            flash("Invalid date or time format.", "error")
+            return redirect(url_for("contest_create"))
 
         if end_time <= start_time:
-            return jsonify({"success": False, "message": "End time must be after start time."}), 400
+            flash("End time must be after start time.", "error")
+            return redirect(url_for("contest_create"))
 
         row, error = contest_service.create_contest(
             name, code, platform, contest_date, start_time, end_time, current_user.id
         )
         if error:
-            return jsonify({"success": False, "message": error}), 400
+            flash(error, "error")
+            return redirect(url_for("contest_create"))
 
         log_admin("create_contest", target=code, details=name)
 
         sheet_ok, sheet_msg = contest_sheet.ensure_sheet_for_contest(dict(row))
         if sheet_ok:
-            return jsonify({"success": True, "message": f"Contest '{name}' created. {sheet_msg}", "redirect": "/contest_dashboard.html"})
+            flash(f"Contest '{name}' created. {sheet_msg}", "success")
         else:
             # Contest exists in Postgres either way — Sheets failure is
             # surfaced but non-fatal, same pattern as email failures
             # elsewhere in this app not blocking signup.
-            return jsonify({
-                "success": True,
-                "message": f"Contest '{name}' created, but {sheet_msg} "
-                           f"Use 'Refresh Sheet' on the dashboard once fixed.",
-                "level": "warning",
-                "redirect": "/contest_dashboard.html"
-            })
+            flash(f"Contest '{name}' created, but {sheet_msg} "
+                  f"Use 'Refresh Sheet' on the dashboard once fixed.", "warning")
+        return redirect(url_for("student_contest"))
 
-    return jsonify({"ok": True})
+    return render_template("contest_create.html")
 
 
 @app.route("/contest/edit/<int:cid>", methods=["POST"])
@@ -100,7 +103,8 @@ def contest_create():
 def contest_edit(cid):
     c = contest_service.get_contest(cid)
     if not c:
-        return jsonify({"success": False, "message": "Contest not found."}), 404
+        flash("Contest not found.", "error")
+        return redirect(url_for("student_contest"))
 
     contest_service.update_contest(
         cid,
@@ -112,7 +116,8 @@ def contest_edit(cid):
     )
     contest_service.sync_status_column(cid)
     log_admin("edit_contest", target=c["contest_code"])
-    return jsonify({"success": True, "message": "Contest updated."})
+    flash("Contest updated.", "success")
+    return redirect(url_for("student_contest"))
 
 
 @app.route("/contest/delete/<int:cid>", methods=["POST"])
@@ -123,8 +128,8 @@ def contest_delete(cid):
     if c:
         contest_service.delete_contest(cid)
         log_admin("delete_contest", target=c["contest_code"])
-        return jsonify({"success": True, "message": f"Contest '{c['contest_name']}' deleted."})
-    return jsonify({"success": False, "message": "Contest not found."}), 404
+        flash(f"Contest '{c['contest_name']}' deleted.", "success")
+    return redirect(url_for("student_contest"))
 
 
 @app.route("/contest/history")
@@ -132,7 +137,7 @@ def contest_delete(cid):
 @admin_required
 def contest_history():
     contests = contest_service.list_contests(status="Completed")
-    return jsonify({"contests": contests})
+    return render_template("contest_history.html", contests=contests)
 
 
 @app.route("/contest/refresh_sheet", methods=["POST"])
@@ -140,60 +145,84 @@ def contest_history():
 @admin_required
 def contest_refresh_sheet():
     ok, msg = contest_sheet.refresh_sheet()
+    flash(msg, "success" if ok else "error")
     log_admin("refresh_contest_sheet", details=msg)
-    return jsonify({"success": ok, "message": msg})
+    return redirect(url_for("student_contest"))
+
+
+# ── Phase 3: problem list + sync ─────────────────────────────────────────────
+
+@app.route("/contest/problems/<int:cid>", methods=["GET"])
+@login_required
+@admin_required
+def contest_problems(cid):
+    c = contest_service.get_contest(cid)
+    if not c:
+        flash("Contest not found.", "error")
+        return redirect(url_for("student_contest"))
+    problems = contest_service.get_contest_problems(cid)
+    return render_template("contest_problems.html", contest=c, problems=problems)
+
+
+@app.route("/contest/problems/<int:cid>/add", methods=["POST"])
+@login_required
+@admin_required
+def contest_add_problem(cid):
+    c = contest_service.get_contest(cid)
+    if not c:
+        flash("Contest not found.", "error")
+        return redirect(url_for("student_contest"))
+
+    from contest.contest_utils import normalize_problem_code
+    problem_id = normalize_problem_code(sanitize(request.form.get("problem_id", ""), 120))
+    platform = request.form.get("platform") or c["platform"]
+
+    if not problem_id:
+        flash("Problem code is required.", "error")
+        return redirect(url_for("contest_problems", cid=cid))
+
+    added = contest_service.add_problem_to_contest(cid, problem_id, platform)
+    if added:
+        flash(f"Problem '{problem_id}' added.", "success")
+        log_admin("contest_add_problem", target=c["contest_code"], details=f"{platform}:{problem_id}")
+    else:
+        flash(f"Problem '{problem_id}' is already in this contest.", "warning")
+    return redirect(url_for("contest_problems", cid=cid))
+
+
+@app.route("/contest/problems/<int:cid>/remove", methods=["POST"])
+@login_required
+@admin_required
+def contest_remove_problem(cid):
+    c = contest_service.get_contest(cid)
+    if not c:
+        flash("Contest not found.", "error")
+        return redirect(url_for("student_contest"))
+
+    problem_id = request.form.get("problem_id", "")
+    contest_service.remove_problem_from_contest(cid, problem_id)
+    log_admin("contest_remove_problem", target=c["contest_code"], details=problem_id)
+    flash(f"Problem '{problem_id}' removed.", "success")
+    return redirect(url_for("contest_problems", cid=cid))
 
 
 @app.route("/contest/sync_now/<int:cid>", methods=["POST"])
 @login_required
 @admin_required
 def contest_sync_now(cid):
-    """Admin 'Sync Now' button — immediately grades one contest."""
+    """Admin 'Sync Now' button — grades one contest immediately instead of
+    waiting for the next scheduler tick. force_resync() first so this also
+    works as a manual retry on a contest that already failed/gave up."""
     c = contest_service.get_contest(cid)
     if not c:
-        return jsonify({"success": False, "message": "Contest not found."}), 404
+        flash("Contest not found.", "error")
+        return redirect(url_for("student_contest"))
+
+    contest_service.force_resync(cid)
+    c = contest_service.get_contest(cid)  # re-fetch: synced/sync_attempts just got reset
 
     from contest.contest_sync import sync_one_contest
     ok, msg = sync_one_contest(c)
     log_admin("contest_sync_now", target=c["contest_code"], details=msg)
-    return jsonify({"success": ok, "message": msg})
-
-
-@app.route("/contest/force_resync/<int:cid>", methods=["POST"])
-@login_required
-@admin_required
-def contest_force_resync(cid):
-    """Resets sync state so the contest will be retried on the next tick."""
-    c = contest_service.get_contest(cid)
-    if not c:
-        return jsonify({"success": False, "message": "Contest not found."}), 404
-
-    contest_service.force_resync(cid)
-    log_admin("contest_force_resync", target=c["contest_code"])
-    return jsonify({"success": True, "message": f"Contest '{c['contest_code']}' queued for re-sync."})
-
-
-@app.route("/contest/add_problem/<int:cid>", methods=["POST"])
-@login_required
-@admin_required
-def contest_add_problem(cid):
-    """Adds a problem to the contest's problem list for grading."""
-    data       = request.get_json(silent=True) or {}
-    problem_id = sanitize(data.get("problem_id", ""), 120).strip()
-    platform   = data.get("platform", "")
-
-    if not problem_id or not platform:
-        return jsonify({"success": False, "message": "problem_id and platform are required."}), 400
-
-    contest_service.add_problem_to_contest(cid, problem_id, platform)
-    log_admin("contest_add_problem", target=str(cid), details=f"{platform}:{problem_id}")
-    return jsonify({"success": True, "message": f"Problem '{problem_id}' added."})
-
-
-@app.route("/contest/problems/<int:cid>")
-@login_required
-@admin_required
-def contest_get_problems(cid):
-    """Returns the problem list for a contest."""
-    problems = contest_service.get_contest_problems(cid)
-    return jsonify({"problems": problems})
+    flash(msg, "success" if ok else "error")
+    return redirect(url_for("student_contest"))

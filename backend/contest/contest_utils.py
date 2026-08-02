@@ -44,7 +44,9 @@ def normalize_contest_code(code):
 
 def get_contest_window(contest):
     """Returns (start_dt, end_dt) as datetime objects for a contest dict.
-    Used by contest_sync.py to query submissions within the contest window."""
+    Used by contest_sync.py to query submissions within the contest window.
+    (This was imported by contest_sync.py but never actually defined here —
+    every sync attempt was raising ImportError/AttributeError before this.)"""
     contest_date = contest["contest_date"]
     start_time   = contest["start_time"]
     end_time     = contest["end_time"]
@@ -59,3 +61,10 @@ def get_contest_window(contest):
     start_dt = datetime.combine(contest_date, start_time)
     end_dt   = datetime.combine(contest_date, end_time)
     return start_dt, end_dt
+
+
+def normalize_problem_code(code):
+    """Cleans up whatever an admin types into the 'add problem' form
+    (e.g. 'a', ' A ') into a plain code. Kept intentionally simple —
+    the live contest_problems table stores it as-is in problem_id."""
+    return str(code or "").strip()

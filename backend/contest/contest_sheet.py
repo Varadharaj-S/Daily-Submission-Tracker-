@@ -14,13 +14,9 @@ for a fake one that behaves like a real spreadsheet). But you should still
 do one real end-to-end test (create a contest, check the actual sheet)
 before relying on this in front of students.
 
-Sheet layout — TWO header rows (row 1 = contest date, row 2 = everything
-else), matching the reference sheet this was redesigned from:
+Sheet layout (fixed, per the Contest Tracker design doc):
 
-    Row 1:  |      |         |      |        | <date_1> | <date_2> | ... |      |      |      |
-    Row 2:  | Reg No | Roll No | Name | Branch | <code_1> | <code_2> | ... | Total Solved | Contests Attended | Attendance % | _user_id
-
-Data rows start at row 3.
+    Reg No | Roll No | Name | Branch | <contest_code_1> | <contest_code_2> | ... | Total Solved | Contests Attended | Attendance % | _user_id
 
 `_user_id` is NOT part of the design doc's visible table — it's appended
 as the last column purely so the backend can reliably match sheet rows
@@ -28,17 +24,10 @@ back to DB users even before every student has a Reg No filled in (reg_no
 is blank for un-backfilled students, so it can't be the matching key on
 its own — see the migration 0003 docstring and the conversation this was
 built from). Admins can ignore that column; nothing in the UI surfaces it.
-
-Cell format for a contest column: "<in_window>" or "<in_window>(<after_window>)"
-— e.g. "2" (solved 2 during the contest window), "0(3)" (solved 0 during
-the window, 3 more later the same day), or blank (solved nothing, in or
-out of the window — blank and "0" mean the same thing here, so we just
-leave it blank for a cleaner-looking sheet).
 """
 
 import os
 import json
-import re
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -52,10 +41,7 @@ STUDENT_CONTEST_TAB = "Student_Contest"
 BASE_COLUMNS = ["Reg No", "Roll No", "Name", "Branch"]
 SUMMARY_COLUMNS = ["Total Solved", "Contests Attended", "Attendance %"]
 KEY_COLUMN = "_user_id"
-
-CODE_HEADER_ROW = 2   # row with Reg No / contest codes / _user_id
-DATE_HEADER_ROW = 1   # row with contest dates (above the code row)
-FIRST_DATA_ROW  = 3
+ABSENT_MARKER = "ABS"
 
 
 # ── Auth (same pattern as normal_sync.py's get_sheet) ─────────────────────────
@@ -77,48 +63,21 @@ def _get_spreadsheet(client=None):
     return client.open_by_key(SHEET_ID)
 
 
-# ── One-time upgrade for sheets created before the two-row header ────────────
-def _migrate_old_single_row_header(sheet):
-    """Old sheets (created by the pre-rewrite contest_sheet.py) have
-    BASE_COLUMNS directly on row 1 — no date row above it. Detected by
-    row 1's first cell being exactly 'Reg No'. Fix: insert one blank row
-    above it, so the old header becomes row 2 (CODE_HEADER_ROW) and row 1
-    becomes the (initially blank) date row this rewrite expects. Existing
-    contest columns just won't have a date label until their next sync —
-    harmless, the date is cosmetic and nothing reads it back. Idempotent:
-    once row 1 no longer starts with 'Reg No', this is a no-op."""
-    row1 = sheet.row_values(1)
-    if row1 and row1[0].strip() == "Reg No":
-        blank_row = [""] * max(len(row1), 1)
-        sheet.insert_row(blank_row, 1)
-        return True
-    return False
-
-
 # ── Sheet creation (once, ever) ────────────────────────────────────────────────
 def get_or_create_student_contest_sheet(client=None):
     spreadsheet = _get_spreadsheet(client)
     try:
         sheet = spreadsheet.worksheet(STUDENT_CONTEST_TAB)
-        _migrate_old_single_row_header(sheet)
     except gspread.exceptions.WorksheetNotFound:
         sheet = spreadsheet.add_worksheet(title=STUDENT_CONTEST_TAB, rows="2000", cols="20")
-        code_header = BASE_COLUMNS + SUMMARY_COLUMNS + [KEY_COLUMN]
-        date_header = [""] * len(code_header)  # no contest columns yet
-        sheet.append_row(date_header)
-        sheet.append_row(code_header)
+        header = BASE_COLUMNS + SUMMARY_COLUMNS + [KEY_COLUMN]
+        sheet.append_row(header)
     return sheet
 
 
 # ── Header helpers ─────────────────────────────────────────────────────────────
 def _header(sheet):
-    """The row 2 header — Reg No / contest codes / summary cols / _user_id."""
-    return sheet.row_values(CODE_HEADER_ROW)
-
-
-def _date_header(sheet):
-    """The row 1 header — contest dates, aligned with row 2's contest columns."""
-    return sheet.row_values(DATE_HEADER_ROW)
+    return sheet.row_values(1)
 
 
 def _contest_columns(header):
@@ -134,14 +93,6 @@ def _col_index(header, name):
     return header.index(name) + 1 if name in header else None
 
 
-def _format_date_label(d):
-    """'11 April 2026' style label for the date header row. `d` is a
-    datetime.date (or None if unknown)."""
-    if d is None:
-        return ""
-    return f"{d.day} {d.strftime('%B')} {d.year}"
-
-
 # ── Student import (additive only — never deletes, never duplicates) ─────────
 def import_students(sheet):
     """Adds any active, non-admin student not already present on the sheet
@@ -150,7 +101,7 @@ def import_students(sheet):
     header = _header(sheet)
     all_values = sheet.get_all_values()
     uid_col = _col_index(header, KEY_COLUMN) - 1  # 0-based for list indexing
-    existing_uids = {row[uid_col] for row in all_values[FIRST_DATA_ROW - 1:] if len(row) > uid_col}
+    existing_uids = {row[uid_col] for row in all_values[1:] if len(row) > uid_col}
 
     with get_db() as db:
         students = db.execute("""
@@ -171,9 +122,9 @@ def import_students(sheet):
             s["full_name"] or s["username"],
             s["branch"] or "",
         ]
-        row += [""] * len(contest_cols)               # blank — hasn't participated in any past contest
-        row += [0, 0, "0%"]                            # Total Solved / Attended / Attendance %
-        row += [str(s["id"])]                          # _user_id
+        row += [ABSENT_MARKER] * len(contest_cols)  # hasn't participated in any past contest
+        row += [0, 0, "0%"]                          # Total Solved / Attended / Attendance %
+        row += [str(s["id"])]                         # _user_id
         new_rows.append(row)
 
     if new_rows:
@@ -182,26 +133,21 @@ def import_students(sheet):
 
 
 # ── Contest column (additive only — never duplicates) ─────────────────────────
-def add_contest_column(sheet, contest_code, contest_date=None):
+def add_contest_column(sheet, contest_code):
     """Inserts a new contest column, positioned right before 'Total Solved'
     so the three summary columns always stay rightmost. Every existing
-    student row starts blank in the new column (blank = 0 = hasn't
-    participated yet). No-op (returns False) if the column already exists
-    — this makes re-running contest creation safe."""
+    student row is initialized to ABS in the new column (design doc:
+    'Initialize all students as ABS'). No-op (returns False) if the column
+    already exists — this makes re-running contest creation safe."""
     header = _header(sheet)
     if contest_code in header:
         return False
 
     total_solved_idx = _col_index(header, "Total Solved")  # 1-based; insert goes right before it
     all_values = sheet.get_all_values()
-    num_data_rows = max(len(all_values) - (FIRST_DATA_ROW - 1), 0)
+    num_data_rows = max(len(all_values) - 1, 0)
 
-    date_label = _format_date_label(contest_date)
-    # gspread's insert_cols wants "a list of col lists" — ONE inner list
-    # per column, containing that column's values top-to-bottom — NOT one
-    # inner list per row. We're inserting a single column, so this must be
-    # a single inner list with every row's value in order.
-    column_values = [[date_label, contest_code] + ([""] * num_data_rows)]
+    column_values = [[contest_code]] + [[ABSENT_MARKER] for _ in range(num_data_rows)]
     sheet.insert_cols(column_values, total_solved_idx)
     return True
 
@@ -211,13 +157,7 @@ def recalculate_summary(sheet):
     """Recomputes Total Solved / Contests Attended / Attendance % for every
     row from the contest columns, and writes all three in a single batch
     update (not one API call per cell — this sheet can have 100+ students
-    and grow a column per contest, so batching matters).
-
-    A cell counts as 'attended' if it's non-blank (any digits at all —
-    including "0(2)", solved-late-only). 'Total Solved' only counts the
-    in-window number (the part before any parenthesis) — after-window
-    solves don't count toward the official total, same as they don't
-    count toward contest rank."""
+    and grow a column per contest, so batching matters)."""
     header = _header(sheet)
     contest_cols = _contest_columns(header)
     if not contest_cols:
@@ -228,7 +168,7 @@ def recalculate_summary(sheet):
     total_idx = _col_index(header, "Total Solved")
 
     all_values = sheet.get_all_values()
-    data_rows = all_values[FIRST_DATA_ROW - 1:]
+    data_rows = all_values[1:]
 
     summary_rows = []
     for row in data_rows:
@@ -237,28 +177,25 @@ def recalculate_summary(sheet):
         total_solved = 0
         attended = 0
         for cell in contest_cells:
-            cell = (cell or "").strip()
-            if not cell:
-                continue
-            attended += 1
-            m = re.match(r"(\d+)", cell)
-            if m:
-                total_solved += int(m.group(1))
+            cell = str(cell if cell is not None else "").strip()
+            if cell and cell != ABSENT_MARKER:
+                attended += 1
+                if cell.lstrip("-").isdigit():
+                    total_solved += int(cell)
         attendance_pct = round((attended / len(contest_cols)) * 100) if contest_cols else 0
         summary_rows.append([total_solved, attended, f"{attendance_pct}%"])
 
     if summary_rows:
         col_letter_start = gspread.utils.rowcol_to_a1(2, total_idx).rstrip("0123456789")
         col_letter_end = gspread.utils.rowcol_to_a1(2, total_idx + 2).rstrip("0123456789")
-        cell_range = f"{col_letter_start}{FIRST_DATA_ROW}:{col_letter_end}{FIRST_DATA_ROW - 1 + len(summary_rows)}"
+        cell_range = f"{col_letter_start}2:{col_letter_end}{1 + len(summary_rows)}"
         sheet.update(cell_range, summary_rows, value_input_option="USER_ENTERED")
 
 
 # ── Orchestration — called from routes/contest.py on contest creation ────────
 def ensure_sheet_for_contest(contest):
     """
-    contest: dict with at least 'contest_code' (and ideally 'contest_date'
-    — used for the date header row when the column is first created).
+    contest: dict with at least 'contest_code'.
     Runs the full Phase 2+3 flow for one newly created contest:
     get/create sheet -> import any new students -> add the contest column
     -> recalculate summary columns.
@@ -271,7 +208,7 @@ def ensure_sheet_for_contest(contest):
     try:
         sheet = get_or_create_student_contest_sheet()
         added = import_students(sheet)
-        created_col = add_contest_column(sheet, contest["contest_code"], contest.get("contest_date"))
+        created_col = add_contest_column(sheet, contest["contest_code"])
         if created_col:
             recalculate_summary(sheet)
         msg = f"Sheet synced ({added} student(s) imported"
@@ -279,6 +216,80 @@ def ensure_sheet_for_contest(contest):
         return True, msg
     except Exception as e:
         return False, f"Google Sheet sync failed: {e}"
+
+
+def write_contest_results(contest_code, results_by_user_id):
+    """
+    Writes each participant's solved count into their row's contest_code
+    column, then recalculates the summary columns. Called by
+    contest_sync.sync_one_contest() after grading is done in Postgres —
+    this is the step that actually gets numbers onto the Student_Contest
+    sheet instead of everyone staying on the default "ABS".
+
+    contest_code: str, must already be a column header (ensure_sheet_for_contest
+        creates it at contest-creation time; this also creates it as a
+        fallback if that step somehow didn't run, so a sync never silently
+        no-ops just because the column is missing).
+    results_by_user_id: {user_id(int): {"solved": int, "participated": bool,
+        "rank": int|None, "score": int}} — as built by contest_sync.py.
+        Students not in this dict, or with participated=False, are left as
+        whatever's already in their cell (ABS by default) — a 0-solve
+        result and "never attempted" both mean nothing was submitted, so
+        there's no scored value to write.
+
+    Returns (ok: bool, message: str). Never raises.
+    """
+    try:
+        sheet = get_or_create_student_contest_sheet()
+        header = _header(sheet)
+        if contest_code not in header:
+            add_contest_column(sheet, contest_code)
+            header = _header(sheet)
+
+        col_idx = _col_index(header, contest_code)
+        uid_col = _col_index(header, KEY_COLUMN)
+        all_values = sheet.get_all_values()
+        data_rows = all_values[1:]
+
+        # Build the full column top-to-bottom and write it in one call —
+        # same pattern recalculate_summary() below already uses, and it's
+        # the one both the real gspread Worksheet and the FakeWorksheet
+        # test double actually implement (unlike batch_update, which the
+        # test double doesn't have).
+        col_values = []
+        written = 0
+        for row in data_rows:
+            uid_cell = row[uid_col - 1] if len(row) >= uid_col else ""
+            existing_cell = row[col_idx - 1] if len(row) >= col_idx else ABSENT_MARKER
+            uid = None
+            if uid_cell:
+                try:
+                    uid = int(uid_cell)
+                except ValueError:
+                    uid = None
+            result = results_by_user_id.get(uid) if uid is not None else None
+            if result and result.get("participated"):
+                # Write as a string, not an int — recalculate_summary()
+                # below calls .strip() on every cell it reads back, which
+                # blows up on a raw int (caught via the FakeWorksheet smoke
+                # test; real Sheets reads back FORMATTED_VALUE strings
+                # anyway, so this matches what it'll actually see there).
+                col_values.append([str(result.get("solved", 0))])
+                written += 1
+            else:
+                # Not a participant in this sync (or no matching uid) —
+                # leave the cell exactly as it was (ABS by default).
+                col_values.append([existing_cell])
+
+        if col_values:
+            col_letter = gspread.utils.rowcol_to_a1(1, col_idx).rstrip("0123456789")
+            cell_range = f"{col_letter}2:{col_letter}{1 + len(col_values)}"
+            sheet.update(cell_range, col_values, value_input_option="USER_ENTERED")
+
+        recalculate_summary(sheet)
+        return True, f"{written} result(s) written to sheet."
+    except Exception as e:
+        return False, f"Google Sheet write failed: {e}"
 
 
 def refresh_sheet():
@@ -291,86 +302,3 @@ def refresh_sheet():
         return True, f"Sheet refreshed ({added} new student(s) imported)."
     except Exception as e:
         return False, f"Google Sheet refresh failed: {e}"
-
-
-# ── write_contest_results — called from contest_sync.py after grading ────────
-
-def _format_result_cell(solved, after_window):
-    """'<solved>' or '<solved>(<after_window>)', blank if both are 0
-    (blank and 0 mean the same thing here — a cleaner-looking sheet)."""
-    if solved == 0 and after_window == 0:
-        return ""
-    if after_window > 0:
-        return f"{solved}({after_window})"
-    return str(solved)
-
-
-def write_contest_results(contest_code, contest_date, results_by_user_id):
-    """
-    Writes graded results for one contest into the Student_Contest sheet.
-
-    contest_date: date object for the contest — only used if the contest
-      column doesn't exist yet and needs to be created (sets the date
-      header row). Safe to pass None if unknown; the date cell is just
-      left blank in that case.
-
-    results_by_user_id: {user_id (int): {"solved": int, "after_window": int,
-                                          "participated": bool, ...}}
-
-    For each student row (matched via the hidden _user_id column), writes
-    "<solved>" / "<solved>(<after_window>)" / blank per _format_result_cell.
-
-    After writing all cells, recalculates the summary columns (Total Solved,
-    Contests Attended, Attendance %) in one batch call.
-
-    Returns (ok: bool, message: str). Never raises.
-    """
-    try:
-        sheet = get_or_create_student_contest_sheet()
-        header = _header(sheet)
-
-        # Ensure the contest column exists
-        if contest_code not in header:
-            add_contest_column(sheet, contest_code, contest_date)
-            header = _header(sheet)  # re-read after insert
-
-        contest_col_idx = _col_index(header, contest_code)  # 1-based
-        uid_col_idx     = _col_index(header, KEY_COLUMN) - 1  # 0-based
-
-        all_values = sheet.get_all_values()
-        data_rows  = all_values[FIRST_DATA_ROW - 1:]  # skip both header rows
-
-        updates = []  # [(row_number_1based, col_1based, value)]
-        for i, row in enumerate(data_rows):
-            sheet_row = i + FIRST_DATA_ROW
-            uid = row[uid_col_idx].strip() if len(row) > uid_col_idx else ""
-            if not uid:
-                continue
-
-            try:
-                uid_int = int(uid)
-            except ValueError:
-                continue
-
-            result = results_by_user_id.get(uid_int)
-            if result is None:
-                # Student not in results (wasn't a participant for this platform)
-                continue
-
-            cell_val = _format_result_cell(result.get("solved", 0), result.get("after_window", 0))
-            updates.append((sheet_row, contest_col_idx, cell_val))
-
-        # Batch update: one API call per cell is too slow for 50+ students.
-        # gspread's batch_update / update with a range is the right call here.
-        if updates:
-            cell_list = []
-            for (r, c, v) in updates:
-                cell = gspread.utils.rowcol_to_a1(r, c)
-                cell_list.append({"range": cell, "values": [[v]]})
-            sheet.batch_update(cell_list, value_input_option="USER_ENTERED")
-
-        recalculate_summary(sheet)
-        return True, f"Sheet updated: {len(updates)} student(s) written for '{contest_code}'."
-
-    except Exception as e:
-        return False, f"Sheet write failed for '{contest_code}': {e}"

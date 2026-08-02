@@ -67,6 +67,27 @@ services:
       - key: GOOGLE_SERVICE_JSON
         sync: false
 
+  # ── Cron Job (contest sync, every 5 min) ────────────────────────────────────
+  # contest_scheduler.py's own docstring already assumed this existed — it
+  # didn't. Without it, contest_sync.run_due_contests() only ever ran when an
+  # admin clicked "Sync Now" by hand; nothing triggered it automatically.
+  - type: cron
+    name: dsa-tracker-contest-sync
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    schedule: "*/5 * * * *"          # runs every 5 minutes
+    startCommand: python contest_scheduler.py
+    plan: free
+
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: dsa-tracker-db
+          property: connectionString
+
+      - key: GOOGLE_SERVICE_JSON
+        sync: false
+
 # ── PostgreSQL Database ─────────────────────────────────────────────────────
 databases:
   - name: dsa-tracker-db
