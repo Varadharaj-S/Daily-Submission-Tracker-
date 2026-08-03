@@ -22,7 +22,7 @@ https://daily-submission-tracker.varadharajs2007.workers.dev/login
 
 GitHub Repository
 
-https://github.com/Varadharaj-S/automation-extension
+https://github.com/Varadharaj-S/Automation_Extension
 
 LeetCode Connectivity Server
 
