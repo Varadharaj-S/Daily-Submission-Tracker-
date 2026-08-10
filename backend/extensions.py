@@ -1,3 +1,24 @@
+"""
+extensions.py — the single shared Flask `app` instance, plus the
+extensions bound to it (login manager, CORS) and the request hooks that
+used to sit at the top of app.py.
+
+Every routes/*.py and services/*.py module imports the shared `app`
+object out of this file (see any file under routes/ for the exact
+import line) and then uses `@app.route(...)` directly — same as the
+old monolithic app.py did. This is deliberately NOT Flask Blueprints:
+blueprints prefix every endpoint name with the blueprint name
+(`dashboard.dashboard` instead of `dashboard`), which would silently
+break every `url_for(...)` call in the Python code AND in the Jinja
+templates. Sharing one `app` object across modules keeps every endpoint
+name byte-for-byte identical to the original app.py, so no template or
+url_for() call anywhere needed to change.
+
+Import order matters: extensions.py must not import anything from routes/
+or services/, or you get a circular import. app.py imports extensions
+first, then imports the routes/services modules (which import the shared
+app object back out of extensions).
+"""
 
 import os
 import time

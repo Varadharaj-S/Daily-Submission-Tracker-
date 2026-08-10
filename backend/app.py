@@ -1,4 +1,23 @@
+"""
+app.py — DSA Tracker v4 entry point.
 
+This used to be a single 2,400+ line file containing every route, every
+helper, the DB schema, the User model, and the scheduler. It's now just
+the assembly point:
+
+  1. `extensions` creates the shared Flask `app` (config, login manager,
+     CORS, before/after_request hooks).
+  2. `database.db.init_db()` creates tables if they don't exist yet — this
+     runs unconditionally at import time, same as the original app.py did
+     (so it also runs correctly under gunicorn, not just `python app.py`).
+  3. Each `routes.*` module is imported for its side effect of registering
+     `@app.route(...)` handlers onto the shared `app` object. No Flask
+     Blueprints are used, specifically so every endpoint name (and every
+     `url_for(...)` call, in Python and in the Jinja templates) stays
+     byte-for-byte identical to the original monolith.
+  4. Error handlers and the dev-server bootstrap live here, same as they
+     did at the bottom of the old app.py.
+"""
 
 import os
 

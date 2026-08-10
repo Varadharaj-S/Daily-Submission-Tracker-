@@ -265,6 +265,29 @@ def init_db():
         db.commit()
 
 
+def ensure_extension_schema():
+    """Adds the extension_token column (Chrome-extension pairing) if it
+    doesn't already exist, and an index for the token lookup on /save_cookie.
+    Called unconditionally at import time from app.py (same reasoning as
+    ensure_contest_schema()): ensure_db_columns() below only runs under the
+    `python app.py` __main__ block, which never executes on Vercel, so any
+    schema patch that production needs has to run here instead.
+    """
+    with get_db() as db:
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS extension_token TEXT")
+        except Exception:
+            pass
+        try:
+            db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_extension_token "
+                "ON users(extension_token) WHERE extension_token IS NOT NULL"
+            )
+        except Exception:
+            pass
+        db.commit()
+
+
 def ensure_db_columns():
     """Legacy-DB column patcher: adds columns that init_db()'s CREATE TABLE
     IF NOT EXISTS won't add to an already-existing table. Moved verbatim
