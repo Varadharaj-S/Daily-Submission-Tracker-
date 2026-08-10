@@ -51,10 +51,10 @@ def save_settings():
 
 
 # ── Chrome Extension: Save LeetCode Cookie ────────────────────────────────────
-# Moved to routes/extension.py: the extension has no Flask session to send,
+# Moved to routes/ext_pairing.py: the extension has no Flask session to send,
 # so this endpoint can't use @login_required like the rest of this file.
 # It now authenticates via `Authorization: Bearer <extension_token>` instead
-# — see routes/extension.py (save_cookie_extension) and
+# — see routes/ext_pairing.py (save_cookie_extension) and
 # /extension/generate-token for how a user pairs the extension in the first
 # place. Kept registered under the same /save_cookie URL and same request/
 # response shape, so nothing else in this file changes.

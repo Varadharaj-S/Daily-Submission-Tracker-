@@ -27,7 +27,7 @@ ensure_contest_schema()
 from routes import auth            # noqa: E402,F401  /, /login, /signup, /logout, /admin/login, email verification
 from routes import dashboard       # noqa: E402,F401  /dashboard, challenge/mentor completion
 from routes import settings        # noqa: E402,F401  /settings, leetcode connect, feedback
-from routes import extension       # noqa: E402,F401  /save_cookie, /extension/* — Chrome extension pairing (Bearer token)
+from routes import ext_pairing     # noqa: E402,F401  /save_cookie, /extension/* — Chrome extension pairing (Bearer token). File is named ext_pairing.py, NOT extension.py — that name is one letter from extensions.py (the shared Flask app module) and Vercel's Python builder was mixing the two up during bundling.
 from routes import sync            # noqa: E402,F401  /sync, /import_lc
 from routes import tracker         # noqa: E402,F401  /problems, /export_csv, daily tracker
 from routes import google_sheet    # noqa: E402,F401  /my_sheet
