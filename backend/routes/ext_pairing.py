@@ -1,3 +1,28 @@
+"""
+routes/ext_pairing.py — Chrome-extension pairing.
+
+Named ext_pairing.py rather than extension.py on purpose: extension.py
+is one letter from extensions.py (the shared Flask `app` module every
+route file imports from) and Vercel's Python builder was resolving the
+two to the same bundled module, causing extensions.py to be overwritten
+at deploy time with this file's content (circular-import crash on boot).
+
+The extension can't hold the Flask browser session (it's a separate
+origin with its own storage), so /save_cookie can't use @login_required
+the way every other authenticated route does. Instead:
+
+  1. The logged-in user calls POST /extension/generate-token (normal
+     session auth, like every other route here) and gets back a random
+     token, stored on their own `users.extension_token` row.
+  2. They paste that token into the extension popup once. The extension
+     keeps it in chrome.storage.local and sends it as
+     `Authorization: Bearer <token>` on every /save_cookie call.
+  3. /save_cookie looks the user up FROM the token — the extension never
+     sends (and the server never trusts) a user id.
+
+One active token per user: generating a new one overwrites/invalidates
+the old one, and /extension/revoke-token clears it outright.
+"""
 
 import secrets
 
