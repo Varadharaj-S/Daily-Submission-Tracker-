@@ -141,13 +141,35 @@
       <div style="background:#0f172a;border:1px solid #1e3a5f;border-radius:10px;padding:14px 16px;margin:12px 0;font-size:.85rem;line-height:1.9">
         <strong style="color:#4d9de0">How to connect using the Chrome Extension:</strong><br>
         1️⃣ &nbsp;Install the <strong>DSA Tracker</strong> extension (see <code>extension/</code> folder)<br>
-        2️⃣ &nbsp;Log in to <a href="https://leetcode.com" target="_blank" style="color:#4d9de0">leetcode.com</a> in the same browser<br>
-        3️⃣ &nbsp;Click the extension icon in your toolbar<br>
-        4️⃣ &nbsp;Enter your site URL and click <strong>Connect LeetCode</strong><br>
-        5️⃣ &nbsp;Done — automatic daily sync starts immediately ✅
+        2️⃣ &nbsp;Generate an extension token below and paste it into the extension popup (<strong>Pair Extension</strong>) — only needed once<br>
+        3️⃣ &nbsp;Log in to <a href="https://leetcode.com" target="_blank" style="color:#4d9de0">leetcode.com</a> in the same browser<br>
+        4️⃣ &nbsp;Click the extension icon in your toolbar<br>
+        5️⃣ &nbsp;Enter your site URL and click <strong>Connect LeetCode</strong><br>
+        6️⃣ &nbsp;Done — automatic daily sync starts immediately ✅
       </div>
       <p class="small muted" style="margin-top:8px">
         No passwords stored. No Selenium. The extension reads your browser cookies directly and sends them securely to this site.
+      </p>
+    </div>
+
+    <div class="info-card">
+      <h3>🔐 Extension Pairing</h3>
+      <p class="section-desc" id="pairStatusText">Checking pairing status…</p>
+      <div class="profile-link-box" id="tokenBox" style="display:none">
+        <span class="mono small" id="extToken">—</span>
+        <button class="btn btn-outline btn-sm" id="copyTokenBtn">Copy</button>
+      </div>
+      <p class="small muted" id="tokenWarning" style="display:none;margin-top:.5rem;color:#f59e0b">
+        ⚠️ Copy this now — it won't be shown again. Paste it into the extension's
+        "Pair Extension" field.
+      </p>
+      <div style="display:flex;gap:.5rem;margin-top:.75rem">
+        <button class="btn btn-primary btn-sm" id="genTokenBtn">Generate Extension Token</button>
+        <button class="btn btn-outline btn-sm" id="revokeTokenBtn" style="display:none">Revoke</button>
+      </div>
+      <p class="small muted" style="margin-top:8px">
+        Generating a new token immediately invalidates any previously paired
+        extension — you'll need to re-pair after regenerating.
       </p>
     </div>
   </div>
@@ -204,7 +226,57 @@ let CURRENT_USER = null;
     connStatus.innerHTML = `<div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.8rem">
       <span style="font-size:1.4rem">🔴</span><span style="font-weight:700;color:#94a3b8">Not Connected</span></div>`;
   }
+
+  await refreshPairStatus();
 })();
+
+// ── Extension pairing ────────────────────────────────────────────────────
+async function refreshPairStatus() {
+  try {
+    const { paired } = await apiGet("/extension/status");
+    document.getElementById("pairStatusText").textContent = paired
+      ? "✅ An extension is currently paired with your account."
+      : "No extension paired yet. Generate a token and paste it into the extension popup.";
+    document.getElementById("revokeTokenBtn").style.display = paired ? "inline-block" : "none";
+  } catch (e) {
+    document.getElementById("pairStatusText").textContent = "Could not load pairing status.";
+  }
+}
+
+document.getElementById("genTokenBtn").addEventListener("click", async () => {
+  const btn = document.getElementById("genTokenBtn");
+  btn.disabled = true;
+  const data = await apiPostJSON("/extension/generate-token", {});
+  btn.disabled = false;
+
+  if (!data.success) {
+    showToast(data.message || "Failed to generate token.", "error");
+    return;
+  }
+
+  document.getElementById("extToken").textContent = data.token;
+  document.getElementById("tokenBox").style.display = "flex";
+  document.getElementById("tokenWarning").style.display = "block";
+  showToast("Extension token generated. Any previously paired extension is now disconnected.", "success");
+  await refreshPairStatus();
+});
+
+document.getElementById("copyTokenBtn").addEventListener("click", () => {
+  const token = document.getElementById("extToken").textContent;
+  if (!token || token === "—") return;
+  navigator.clipboard.writeText(token);
+  showToast("Token copied!", "success");
+});
+
+document.getElementById("revokeTokenBtn").addEventListener("click", async () => {
+  if (!confirm("Revoke the current extension token? Any paired extension will stop working until you pair it again.")) return;
+  const data = await apiPostJSON("/extension/revoke-token", {});
+  showToast(data.message || (data.success ? "Token revoked." : "Failed to revoke."), data.success ? "success" : "error");
+  document.getElementById("tokenBox").style.display = "none";
+  document.getElementById("tokenWarning").style.display = "none";
+  document.getElementById("extToken").textContent = "—";
+  await refreshPairStatus();
+});
 
 document.getElementById("profileForm").addEventListener("submit", async (e) => {
   e.preventDefault();

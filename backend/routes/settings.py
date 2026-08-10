@@ -51,34 +51,13 @@ def save_settings():
 
 
 # ── Chrome Extension: Save LeetCode Cookie ────────────────────────────────────
-@app.route("/save_cookie", methods=["POST"])
-@login_required
-def save_cookie():
-    """
-    Called by the Chrome extension popup.
-    Receives LEETCODE_SESSION and csrftoken and saves them for the logged-in user.
-    """
-    data = request.get_json(force=True) or {}
-    lc_session = (data.get("leetcode_session") or "").strip()[:2000]
-    csrf_token = (data.get("csrf_token") or "").strip()[:200]
-
-    if not lc_session or not csrf_token:
-        return jsonify({"success": False, "message": "Missing session or CSRF token"}), 400
-
-    with get_db() as db:
-        db.execute("""
-            UPDATE users SET
-                lc_session_cookie=?,
-                lc_csrf_token=?,
-                cookie_expiry=0
-            WHERE id=?
-        """, (lc_session, csrf_token, current_user.id))
-        db.commit()
-
-    return jsonify({
-        "success": True,
-        "message": "Cookie saved"
-    })
+# Moved to routes/extension.py: the extension has no Flask session to send,
+# so this endpoint can't use @login_required like the rest of this file.
+# It now authenticates via `Authorization: Bearer <extension_token>` instead
+# — see routes/extension.py (save_cookie_extension) and
+# /extension/generate-token for how a user pairs the extension in the first
+# place. Kept registered under the same /save_cookie URL and same request/
+# response shape, so nothing else in this file changes.
 
 
 # ── Chrome Extension: Cookie Status ───────────────────────────────────────────

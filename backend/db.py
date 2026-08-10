@@ -1,23 +1,4 @@
-"""
-db.py — Centralized PostgreSQL database access for DSA Tracker.
 
-This project has been fully migrated off SQLite. Every part of the app
-(app.py, bot.py, scheduler.py, normal_sync.py, bot_sheet_sync.py,
-sync/sync_service.py, and the one-off maintenance scripts) now goes
-through get_db() in this file, which always returns a PostgreSQL
-connection.
-
-Set the DATABASE_URL environment variable to a PostgreSQL connection
-string, e.g.:
-
-    postgresql://user:password@host:5432/dsa_tracker
-
-On Render, DATABASE_URL is injected automatically (see render.yaml).
-For local development, install PostgreSQL and export DATABASE_URL
-yourself, e.g.:
-
-    export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/dsa_tracker"
-"""
 
 import os
 import psycopg2
@@ -262,4 +243,44 @@ def init_db():
                   generate_password_hash("admin123"),
                   '["Codeforces","LeetCode","AtCoder"]',
                   datetime.now().isoformat()))
+        db.commit()
+
+
+def ensure_extension_schema():
+    """Adds the extension_token column (Chrome-extension pairing) if it
+    doesn't already exist, and an index for the token lookup on /save_cookie.
+    Called unconditionally at import time from app.py (same reasoning as
+    ensure_contest_schema()): ensure_db_columns() below only runs under the
+    `python app.py` __main__ block, which never executes on Vercel, so any
+    schema patch that production needs has to run here instead.
+    """
+    with get_db() as db:
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS extension_token TEXT")
+        except Exception:
+            pass
+        try:
+            db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_extension_token "
+                "ON users(extension_token) WHERE extension_token IS NOT NULL"
+            )
+        except Exception:
+            pass
+        db.commit()
+
+
+def ensure_db_columns():
+    """Legacy-DB column patcher: adds columns that init_db()'s CREATE TABLE
+    IF NOT EXISTS won't add to an already-existing table. Moved verbatim
+    from app.py, where it ran once on startup."""
+    with get_db() as db:
+        for stmt in [
+            "ALTER TABLE users ADD COLUMN lc_imported INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN auto_sync_enabled INTEGER DEFAULT 1",
+            "ALTER TABLE users ADD COLUMN sync_time TEXT DEFAULT '09:00'",
+        ]:
+            try:
+                db.execute(stmt)
+            except Exception:
+                pass
         db.commit()

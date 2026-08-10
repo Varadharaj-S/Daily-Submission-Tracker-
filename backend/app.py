@@ -1,33 +1,19 @@
-"""
-app.py — DSA Tracker v4 entry point.
-
-This used to be a single 2,400+ line file containing every route, every
-helper, the DB schema, the User model, and the scheduler. It's now just
-the assembly point:
-
-  1. `extensions` creates the shared Flask `app` (config, login manager,
-     CORS, before/after_request hooks).
-  2. `database.db.init_db()` creates tables if they don't exist yet — this
-     runs unconditionally at import time, same as the original app.py did
-     (so it also runs correctly under gunicorn, not just `python app.py`).
-  3. Each `routes.*` module is imported for its side effect of registering
-     `@app.route(...)` handlers onto the shared `app` object. No Flask
-     Blueprints are used, specifically so every endpoint name (and every
-     `url_for(...)` call, in Python and in the Jinja templates) stays
-     byte-for-byte identical to the original monolith.
-  4. Error handlers and the dev-server bootstrap live here, same as they
-     did at the bottom of the old app.py.
-"""
 
 import os
 
 from extensions import app
-from database.db import init_db
+from database.db import init_db, ensure_extension_schema
 from services.tracker_service import ensure_tracker_schema
 from contest.contest_service import ensure_contest_schema
 
 # ── DB (PostgreSQL only — see database/db.py) ────────────────────────────────
 init_db()
+
+# extension_token isn't part of init_db()'s baseline CREATE TABLE, so on an
+# already-existing users table it has to be patched in separately. Runs
+# unconditionally (like ensure_contest_schema() below) so it also happens on
+# Vercel cold starts, not just under `python app.py`'s __main__ block.
+ensure_extension_schema()
 
 # contest_events/contest_results/contest_problems are NOT part of init_db()'s
 # baseline schema — they were added later via database/migrate.py, a
@@ -40,7 +26,8 @@ ensure_contest_schema()
 # ── Route modules (import for side-effect route registration) ───────────────
 from routes import auth            # noqa: E402,F401  /, /login, /signup, /logout, /admin/login, email verification
 from routes import dashboard       # noqa: E402,F401  /dashboard, challenge/mentor completion
-from routes import settings        # noqa: E402,F401  /settings, cookie endpoints, leetcode connect, feedback
+from routes import settings        # noqa: E402,F401  /settings, leetcode connect, feedback
+from routes import extension       # noqa: E402,F401  /save_cookie, /extension/* — Chrome extension pairing (Bearer token)
 from routes import sync            # noqa: E402,F401  /sync, /import_lc
 from routes import tracker         # noqa: E402,F401  /problems, /export_csv, daily tracker
 from routes import google_sheet    # noqa: E402,F401  /my_sheet
