@@ -50,8 +50,6 @@ def get_sheet(username):
     return sheet
 
 def regroup_sheet(sheet):
-    from collections import defaultdict
-
     values = sheet.get_all_values()
 
     if len(values) <= 1:
@@ -59,15 +57,28 @@ def regroup_sheet(sheet):
 
     values = values[1:]   # Skip header
 
-    date_rows = defaultdict(list)
-
-    current_date = ""
-
+    # Group rows into CONTIGUOUS blocks, not by date-string value. A blank
+    # column-A cell means "same block as the row above" (that's the whole
+    # point of the merge); it does NOT mean "same block as every other row
+    # anywhere in the sheet that happens to share this date string". Two
+    # non-adjacent blocks can legitimately have the same date (e.g. today's
+    # date shows up again after a later sync appends more rows below other,
+    # different dates) — grouping those together previously produced a
+    # merge range spanning every unrelated row in between, which collided
+    # with the separate merge already queued for those rows and made the
+    # Sheets API reject the whole batch with "You must select all cells in
+    # a merged range to merge or unmerge them."
+    date_blocks = []
+    current_block = []
     for row_no, row in enumerate(values, start=2):
         if row[0].strip():
-            current_date = row[0].strip()
-
-        date_rows[current_date].append(row_no)
+            if current_block:
+                date_blocks.append(current_block)
+            current_block = [row_no]
+        else:
+            current_block.append(row_no)
+    if current_block:
+        date_blocks.append(current_block)
 
     try:
         sheet.spreadsheet.batch_update({
@@ -84,7 +95,7 @@ def regroup_sheet(sheet):
 
     requests = []
 
-    for rows in date_rows.values():
+    for rows in date_blocks:
 
         if len(rows) == 1:
             continue
