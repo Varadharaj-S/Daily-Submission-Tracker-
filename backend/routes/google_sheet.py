@@ -13,8 +13,42 @@ from flask import jsonify
 from flask_login import current_user
 
 from extensions import app
-from utils.decorators import login_required
+from utils.decorators import login_required, admin_required
 from normal_sync import CREDENTIALS_FILE, SHEET_ID
+from services.mentor_sheet_sync import MENTOR_SHEET_TAB
+
+
+@app.route("/admin/master_sheet")
+@login_required
+@admin_required
+def admin_master_sheet():
+    """
+    'My Sheet' button for the admin page — jumps straight to the roster
+    tab (MENTOR_SHEET_TAB, e.g. "SkillRack Sir Class Track") instead of a
+    per-student tab, so an admin doesn't have to hunt for it manually.
+    """
+    scope = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    if os.getenv("GOOGLE_SERVICE_JSON"):
+        service_info = json.loads(os.environ["GOOGLE_SERVICE_JSON"])
+        creds = Credentials.from_service_account_info(service_info, scopes=scope)
+    else:
+        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scope)
+
+    gc = gspread.authorize(creds)
+    spreadsheet = gc.open_by_key(SHEET_ID)
+
+    try:
+        worksheet = spreadsheet.worksheet(MENTOR_SHEET_TAB)
+        url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit#gid={worksheet.id}"
+    except gspread.exceptions.WorksheetNotFound:
+        # Roster tab not found under the configured name — send the admin
+        # to the spreadsheet's first tab instead of failing outright.
+        url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit"
+
+    return jsonify({"success": True, "url": url, "tab": MENTOR_SHEET_TAB})
 
 
 @app.route("/my_sheet")

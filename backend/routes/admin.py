@@ -20,6 +20,7 @@ from flask_login import current_user
 from services.sync_engine import sync_user_data
 from workers.backup_worker import run_backup, run_restore, list_backups
 from normal_sync import rebuild_user_sheet_from_db, backfill_missing_rows_from_db
+from services.mentor_sheet_sync import sync_assignment_to_sheet, resync_all as sheet_resync_all
 
 
 # ── Admin Dashboard ────────────────────────────────────────────────────────────
@@ -238,16 +239,24 @@ def mentor():
             if assign_all:
                 # Assign to ALL active non-admin students
                 students = db.execute(
-                    "SELECT id FROM users WHERE status='active' AND is_admin=0"
+                    "SELECT id, reg_no, full_name FROM users WHERE status='active' AND is_admin=0"
                 ).fetchall()
                 created = dupes = solved = 0
+                sheet_rows = []
                 for s in students:
                     result = _assign_one(db, current_user.id, s["id"],
                                          pname, purl, diff, plat, topic, note, due, today)
                     if result == "created":        created += 1
                     elif result == "duplicate":    dupes   += 1
                     elif result == "already_solved": created += 1; solved += 1
+                    if result in ("created", "already_solved"):
+                        sheet_rows.append({
+                            "reg_no": s["reg_no"], "full_name": s["full_name"],
+                            "completed": result == "already_solved"
+                        })
                 db.commit()
+                if sheet_rows:
+                    run_background(sync_assignment_to_sheet, pname, purl, due, sheet_rows)
                 msg = f"Assigned to {created} student(s)."
                 if dupes:   msg += f" {dupes} already assigned (skipped)."
                 if solved:  msg += f" {solved} already solved (marked Completed)."
@@ -262,7 +271,7 @@ def mentor():
 
                 # Ownership check: student must be active and not admin
                 student = db.execute(
-                    "SELECT id FROM users WHERE id=%s AND status='active' AND is_admin=0",
+                    "SELECT id, reg_no, full_name FROM users WHERE id=%s AND status='active' AND is_admin=0",
                     (uid,)
                 ).fetchone()
                 if not student:
@@ -273,6 +282,12 @@ def mentor():
                 db.commit()
                 if result == "duplicate":
                     return jsonify({"success": False, "message": "This problem is already assigned to that student."}), 409
+
+                run_background(sync_assignment_to_sheet, pname, purl, due, [{
+                    "reg_no": student["reg_no"], "full_name": student["full_name"],
+                    "completed": result == "already_solved"
+                }])
+
                 if result == "already_solved":
                     return jsonify({"success": True, "message": "Problem assigned and marked Completed (student already solved it)."})
                 return jsonify({"success": True, "message": "Problem assigned."})
@@ -360,8 +375,17 @@ def mentor_refresh_status():
                 db.execute("UPDATE mentor_assignments SET completed=1 WHERE id=%s", (a["id"],))
                 updated += 1
         db.commit()
-    return jsonify({"success": True, "updated": updated,
-                    "message": f"{updated} assignment(s) updated to Completed."})
+
+    sheet_summary = sheet_resync_all(get_db)
+    msg = f"{updated} assignment(s) updated to Completed."
+    if sheet_summary.get("skipped"):
+        msg += " (Sheet sync skipped — check MENTOR_SHEET_TAB / sheet access.)"
+    else:
+        msg += (f" Sheet: {sheet_summary['columns_touched']} column(s), "
+                f"{sheet_summary['cells_updated']} cell(s), "
+                f"{sheet_summary['rows_added']} new student row(s) synced.")
+    return jsonify({"success": True, "updated": updated, "sheet_sync": sheet_summary,
+                    "message": msg})
 
 
 @app.route("/admin/mentor/approve_all", methods=["POST"])
@@ -422,6 +446,7 @@ def mentor_search_problem():
 
         results = []
         solved_count = 0
+        sheet_rows = []
         for s in students:
             solved = _is_solved_by_student(db, s["id"], purl, pname)
             if solved:
@@ -435,6 +460,13 @@ def mentor_search_problem():
                 "problem_url": purl,
                 "solved": solved
             })
+            sheet_rows.append({"reg_no": s["reg_no"], "full_name": s["full_name"], "completed": solved})
+
+    # Best-effort: mirror this exact search into the roster sheet too, so a
+    # searched problem shows up as a column there the same way an assigned
+    # one does — this doesn't touch mentor_assignments, it's read-only from
+    # the DB's point of view, just a sheet mirror of what was searched.
+    run_background(sync_assignment_to_sheet, pname, purl, "", sheet_rows)
 
     return jsonify({
         "success": True,

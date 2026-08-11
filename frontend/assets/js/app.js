@@ -65,6 +65,12 @@ async function openMySheet() {
   else showToast(data.message || "Could not open sheet.", "error");
 }
 
+async function openMasterSheet() {
+  const data = await apiGet("/admin/master_sheet");
+  if (data.url) window.open(data.url, "_blank");
+  else showToast(data.message || "Could not open master sheet.", "error");
+}
+
 // ── Auth guard ──────────────────────────────────────────────────────────────
 // Call at the top of every protected page. Mirrors @login_required /
 // @admin_required / @verified_required from utils/decorators.py.

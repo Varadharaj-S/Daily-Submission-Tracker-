@@ -7,5 +7,5 @@ venv/
 dsa_tracker.db
 dsa_tracker.db-shm
 dsa_tracker.db-wal
-
+CLAUDE.md
 *.json
