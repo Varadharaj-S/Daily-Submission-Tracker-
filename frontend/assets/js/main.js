@@ -228,3 +228,26 @@ document.querySelectorAll(".nav-link").forEach(l =>
     document.getElementById("navLinks")?.classList.remove("open")
   )
 );
+
+/* ── Generic client-side pagination helpers ─────────────────────────────
+   Reused by admin.html / mentor.html so every long list (users, logs,
+   student progress, assignments, search results) is paginated the same
+   way instead of dumping everything on one page. */
+function paginateArray(arr, page, perPage) {
+  arr = arr || [];
+  const total = arr.length;
+  const total_pages = Math.max(1, Math.ceil(total / perPage));
+  page = Math.min(Math.max(1, page || 1), total_pages);
+  const start = (page - 1) * perPage;
+  return { items: arr.slice(start, start + perPage), page, total_pages, total };
+}
+
+function paginationHTML(page, total_pages, onClickFn, extraArgs = "") {
+  if (total_pages <= 1) return "";
+  const args = extraArgs ? extraArgs + "," : "";
+  return `<div class="pagination">
+    <button class="page-btn" ${page <= 1 ? "disabled style='opacity:.4;cursor:default'" : ""} onclick="${onClickFn}(${args}${page - 1})">← Prev</button>
+    <span class="page-info mono">Page ${page} / ${total_pages}</span>
+    <button class="page-btn" ${page >= total_pages ? "disabled style='opacity:.4;cursor:default'" : ""} onclick="${onClickFn}(${args}${page + 1})">Next →</button>
+  </div>`;
+}

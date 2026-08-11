@@ -390,6 +390,60 @@ def mentor_approve_all():
                     "message": f"{count} pending user(s) approved."})
 
 
+@app.route("/admin/mentor/search_problem")
+@login_required
+@admin_required
+def mentor_search_problem():
+    """
+    Search across the WHOLE database (every student, not just this mentor's
+    own assignments) for a given problem, and report per-student whether it
+    has been solved. Powers the "Search Problem" tab in Mentor Mode — the
+    result mirrors what a sheet with columns
+    Student Name | Register Number | Problem Name | Problem Link | Solved
+    would look like, one row per student in the database.
+    """
+    pname = sanitize(request.args.get("problem_name", ""), 200)
+    purl  = sanitize(request.args.get("problem_url", ""), 300)
+
+    if not pname and not purl:
+        return jsonify({
+            "success": False,
+            "message": "Enter a problem name or URL to search.",
+            "results": []
+        }), 400
+
+    with get_db() as db:
+        students = db.execute("""
+            SELECT id, username, full_name, reg_no
+            FROM users
+            WHERE is_admin=0
+            ORDER BY username ASC
+        """).fetchall()
+
+        results = []
+        solved_count = 0
+        for s in students:
+            solved = _is_solved_by_student(db, s["id"], purl, pname)
+            if solved:
+                solved_count += 1
+            results.append({
+                "user_id": s["id"],
+                "username": s["username"],
+                "full_name": s["full_name"] or "",
+                "reg_no": s["reg_no"] or "",
+                "problem_name": pname,
+                "problem_url": purl,
+                "solved": solved
+            })
+
+    return jsonify({
+        "success": True,
+        "results": results,
+        "total": len(results),
+        "solved_count": solved_count
+    })
+
+
 # ── Custom Problems ───────────────────────────────────────────────────────────
 @app.route("/admin/custom_problem", methods=["POST"])
 @login_required

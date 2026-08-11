@@ -101,13 +101,22 @@ function adminToast(msg, ok = true) {
   setTimeout(() => t.classList.remove("show"), 3000);
 }
 
+const PER_PAGE = 8;
+let usersPage = 1, logsPage = 1, usersSearch = "";
+
 function filterUsers() {
-  const q = document.getElementById("userSearch").value.toLowerCase();
-  document.querySelectorAll("#usersTable tbody tr").forEach(tr => {
-    if (tr.id && tr.id.startsWith("detail-")) { tr.style.display = "none"; return; }
-    const match = !q || (tr.dataset.username || "").includes(q) || (tr.dataset.cf || "").includes(q) || (tr.dataset.lc || "").includes(q);
-    tr.style.display = match ? "" : "none";
-  });
+  usersSearch = document.getElementById("userSearch").value.toLowerCase();
+  usersPage = 1;
+  renderUsersTable();
+}
+function goUsersPage(p) { usersPage = p; renderUsersTable(); }
+function goLogsPage(p) { logsPage = p; renderLogsTable(); }
+
+async function approveAllPending() {
+  if (!confirm("Approve ALL pending user accounts?")) return;
+  const d = await apiPostJSON("/admin/mentor/approve_all", {});
+  adminToast(d.message || (d.success ? "Done!" : "Failed"), d.success);
+  if (d.success) location.reload();
 }
 
 function toggleDetail(uid) {
@@ -186,8 +195,83 @@ document.addEventListener("submit", async (e) => {
   }
 });
 
+let ADMIN_DATA = null;
+
+function renderUsersTable() {
+  const body = document.getElementById("usersTableBody");
+  const pag = document.getElementById("usersPagination");
+  if (!body || !ADMIN_DATA) return;
+  const d = ADMIN_DATA;
+  let activeRows = (d.users || []).filter(u => u.status !== "pending");
+  if (usersSearch) {
+    activeRows = activeRows.filter(u =>
+      (u.username || "").toLowerCase().includes(usersSearch) ||
+      (u.cf_handle || "").toLowerCase().includes(usersSearch) ||
+      (u.lc_handle || "").toLowerCase().includes(usersSearch)
+    );
+  }
+  const { items, page, total_pages } = paginateArray(activeRows, usersPage, PER_PAGE);
+  body.innerHTML = items.length ? items.map(u => `
+      <tr class="${u.is_admin ? "row-admin" : ""}">
+        <td class="mono small muted">${u.id}</td>
+        <td><a href="profile.html?username=${encodeURIComponent(u.username)}" style="font-weight:600;text-decoration:none;color:var(--text)">${u.username}</a></td>
+        <td><span class="status-badge status-${u.status}">${u.status.charAt(0).toUpperCase() + u.status.slice(1)}</span></td>
+        <td>${u.is_admin ? `<span class="role-badge role-admin">Admin</span>` : `<span class="role-badge role-user">User</span>`}</td>
+        <td class="mono small">${u.cf_handle || "—"}</td>
+        <td class="mono small">${u.lc_handle || "—"}</td>
+        <td class="mono small">${u.ac_handle || "—"}</td>
+        <td class="num-highlight">${d.counts[u.id] || 0}</td>
+        <td>${u.lc_imported ? `<span class="lc-badge">✓ Done</span>` : `<span class="muted small">—</span>`}</td>
+        <td class="mono small muted">${(u.last_sync || "—").slice(0, 16)}</td>
+        <td class="actions-cell">
+          <button class="btn-sm btn-promote" title="Details" onclick="toggleDetail(${u.id})">⋯</button>
+          <button class="btn-sm btn-sync" title="Sync this user" onclick="syncUser(${u.id}, this)">↻</button>
+          <button class="btn-sm btn-restore" title="Rebuild this user's Google Sheet from the database" onclick="restoreSheet(${u.id}, '${u.username}', this)">📊</button>
+          ${u.id !== d.__me_id ? `
+            <button class="btn-sm btn-promote" title="${u.is_admin ? "Demote" : "Promote to Admin"}" onclick="promoteUser(${u.id})">${u.is_admin ? "↓" : "↑"}</button>
+            ${u.lc_imported ? `<button class="btn-sm btn-reset" title="Reset LC import flag" onclick="resetLC(${u.id}, this)">⟳LC</button>` : ""}
+            <button class="btn-sm btn-delete" title="Delete user" onclick="deleteUser(${u.id}, '${u.username}')">✕</button>
+          ` : `<span class="you-badge">you</span>`}
+        </td>
+      </tr>
+      <tr id="detail-${u.id}" style="display:none">
+        <td colspan="11" class="user-detail-row">
+          <div class="user-detail-grid">
+            <div class="detail-item"><div class="dk">Email</div><div class="dv">${u.email || "—"}</div></div>
+            <div class="detail-item"><div class="dk">Joined</div><div class="dv">${(u.created_at || "—").slice(0, 16)}</div></div>
+            <div class="detail-item"><div class="dk">Last Login</div><div class="dv">${(u.last_login || "—").slice(0, 16)}</div></div>
+            <div class="detail-item"><div class="dk">LC Cookie</div><div class="dv">${u.lc_session_cookie ? "✅ Set" : "❌ Not set"}</div></div>
+            <div class="detail-item"><div class="dk">CSRF Token</div><div class="dv">${u.lc_csrf_token ? "✅ Set" : "❌ Not set"}</div></div>
+            <div class="detail-item"><div class="dk">Auto Sync</div><div class="dv">${u.auto_sync_enabled ? "✅ On" : "❌ Off"}</div></div>
+            <div class="detail-item"><div class="dk">Sheet ID</div><div class="dv">${u.sheet_id || "—"}</div></div>
+            <div class="detail-item"><div class="dk">Bio</div><div class="dv">${u.bio || "—"}</div></div>
+          </div>
+        </td>
+      </tr>`).join("") : `<tr><td colspan="11" class="empty-state" style="padding:2rem;text-align:center">No users found.</td></tr>`;
+  pag.innerHTML = paginationHTML(page, total_pages, "goUsersPage");
+}
+
+function renderLogsTable() {
+  const body = document.getElementById("logsTableBody");
+  const pag = document.getElementById("logsPagination");
+  if (!body || !ADMIN_DATA) return;
+  const logs = ADMIN_DATA.logs || [];
+  const { items, page, total_pages } = paginateArray(logs, logsPage, PER_PAGE);
+  body.innerHTML = items.length ? items.map(log => `
+      <tr>
+        <td class="mono small muted">${(log.created_at || "").slice(0, 16)}</td>
+        <td><span class="log-action">${log.action}</span></td>
+        <td class="mono small">${log.target_user || "—"}</td>
+        <td class="muted small">${log.details || "—"}</td>
+        <td class="mono small muted">${log.ip}</td>
+      </tr>`).join("") : `<tr><td colspan="5" class="empty-state">No logs yet.</td></tr>`;
+  pag.innerHTML = paginationHTML(page, total_pages, "goLogsPage");
+}
+
 function renderAdmin(d) {
   ME_ID = d.__me_id;
+  ADMIN_DATA = d;
+  usersPage = 1; logsPage = 1; usersSearch = "";
   const chartOpts = () => ({
     responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
     scales: { x: { ticks: { color: "#555", font: { family: "monospace", size: 9 } }, grid: { color: "rgba(255,255,255,.04)" } },
@@ -195,7 +279,6 @@ function renderAdmin(d) {
   });
 
   const plist = (d.users || []).filter(u => u.status === "pending");
-  const activeRows = (d.users || []).filter(u => u.status !== "pending");
   const avgPerUser = Math.floor(d.total_subs / Math.max(d.active_users, 1));
 
   document.getElementById("app").innerHTML = `
@@ -212,6 +295,7 @@ function renderAdmin(d) {
         <button class="btn btn-primary" onclick="syncAll()">⚡ Sync All</button>
         <button class="btn btn-outline" onclick="doBackup()">💾 Backup</button>
         <button class="btn btn-outline" onclick="restoreAllSheets()" title="Rebuild every user's Sheet tab from PostgreSQL">🔄 Restore All Sheets</button>
+        ${d.pending ? `<button class="btn btn-outline" onclick="approveAllPending()" title="Approve all pending user registrations" style="border-color:#34d399;color:#34d399">✓ Approve All Users</button>` : ""}
       </div>
     </div>
 
@@ -259,64 +343,19 @@ function renderAdmin(d) {
       <div class="table-wrap">
         <table id="usersTable">
           <thead><tr><th>ID</th><th>Username</th><th>Status</th><th>Role</th><th>CF</th><th>LC</th><th>AC</th><th>Problems</th><th>LC Import</th><th>Last Sync</th><th>Actions</th></tr></thead>
-          <tbody>
-            ${activeRows.map(u => `
-              <tr class="${u.is_admin ? "row-admin" : ""}" data-username="${(u.username || "").toLowerCase()}" data-cf="${(u.cf_handle || "").toLowerCase()}" data-lc="${(u.lc_handle || "").toLowerCase()}">
-                <td class="mono small muted">${u.id}</td>
-                <td><a href="profile.html?username=${encodeURIComponent(u.username)}" style="font-weight:600;text-decoration:none;color:var(--text)">${u.username}</a></td>
-                <td><span class="status-badge status-${u.status}">${u.status.charAt(0).toUpperCase() + u.status.slice(1)}</span></td>
-                <td>${u.is_admin ? `<span class="role-badge role-admin">Admin</span>` : `<span class="role-badge role-user">User</span>`}</td>
-                <td class="mono small">${u.cf_handle || "—"}</td>
-                <td class="mono small">${u.lc_handle || "—"}</td>
-                <td class="mono small">${u.ac_handle || "—"}</td>
-                <td class="num-highlight">${d.counts[u.id] || 0}</td>
-                <td>${u.lc_imported ? `<span class="lc-badge">✓ Done</span>` : `<span class="muted small">—</span>`}</td>
-                <td class="mono small muted">${(u.last_sync || "—").slice(0, 16)}</td>
-                <td class="actions-cell">
-                  <button class="btn-sm btn-promote" title="Details" onclick="toggleDetail(${u.id})">⋯</button>
-                  <button class="btn-sm btn-sync" title="Sync this user" onclick="syncUser(${u.id}, this)">↻</button>
-                  <button class="btn-sm btn-restore" title="Rebuild this user's Google Sheet from the database" onclick="restoreSheet(${u.id}, '${u.username}', this)">📊</button>
-                  ${u.id !== d.__me_id ? `
-                    <button class="btn-sm btn-promote" title="${u.is_admin ? "Demote" : "Promote to Admin"}" onclick="promoteUser(${u.id})">${u.is_admin ? "↓" : "↑"}</button>
-                    ${u.lc_imported ? `<button class="btn-sm btn-reset" title="Reset LC import flag" onclick="resetLC(${u.id}, this)">⟳LC</button>` : ""}
-                    <button class="btn-sm btn-delete" title="Delete user" onclick="deleteUser(${u.id}, '${u.username}')">✕</button>
-                  ` : `<span class="you-badge">you</span>`}
-                </td>
-              </tr>
-              <tr id="detail-${u.id}" style="display:none">
-                <td colspan="11" class="user-detail-row">
-                  <div class="user-detail-grid">
-                    <div class="detail-item"><div class="dk">Email</div><div class="dv">${u.email || "—"}</div></div>
-                    <div class="detail-item"><div class="dk">Joined</div><div class="dv">${(u.created_at || "—").slice(0, 16)}</div></div>
-                    <div class="detail-item"><div class="dk">Last Login</div><div class="dv">${(u.last_login || "—").slice(0, 16)}</div></div>
-                    <div class="detail-item"><div class="dk">LC Cookie</div><div class="dv">${u.lc_session_cookie ? "✅ Set" : "❌ Not set"}</div></div>
-                    <div class="detail-item"><div class="dk">CSRF Token</div><div class="dv">${u.lc_csrf_token ? "✅ Set" : "❌ Not set"}</div></div>
-                    <div class="detail-item"><div class="dk">Auto Sync</div><div class="dv">${u.auto_sync_enabled ? "✅ On" : "❌ Off"}</div></div>
-                    <div class="detail-item"><div class="dk">Sheet ID</div><div class="dv">${u.sheet_id || "—"}</div></div>
-                    <div class="detail-item"><div class="dk">Bio</div><div class="dv">${u.bio || "—"}</div></div>
-                  </div>
-                </td>
-              </tr>`).join("")}
-          </tbody>
+          <tbody id="usersTableBody"></tbody>
         </table>
       </div>
+      <div id="usersPagination"></div>
     </div>
 
     <div class="table-card">
       <div class="table-card-header"><h3>📋 Action Log <span class="muted small">(last 30)</span></h3></div>
       <div class="table-wrap"><table>
         <thead><tr><th>Time</th><th>Action</th><th>Target</th><th>Details</th><th>IP</th></tr></thead>
-        <tbody>
-          ${(d.logs && d.logs.length) ? d.logs.map(log => `
-            <tr>
-              <td class="mono small muted">${(log.created_at || "").slice(0, 16)}</td>
-              <td><span class="log-action">${log.action}</span></td>
-              <td class="mono small">${log.target_user || "—"}</td>
-              <td class="muted small">${log.details || "—"}</td>
-              <td class="mono small muted">${log.ip}</td>
-            </tr>`).join("") : `<tr><td colspan="5" class="empty-state">No logs yet.</td></tr>`}
-        </tbody>
+        <tbody id="logsTableBody"></tbody>
       </table></div>
+      <div id="logsPagination"></div>
     </div>
 
     <div class="table-card">
@@ -329,6 +368,9 @@ function renderAdmin(d) {
         </form>
       </div>
     </div>`;
+
+  renderUsersTable();
+  renderLogsTable();
 
   if (document.getElementById("signupChart")) {
     new Chart(document.getElementById("signupChart"), {
