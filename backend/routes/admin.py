@@ -155,12 +155,73 @@ def admin_promote(uid):
 
 
 # ── Mentor Mode ───────────────────────────────────────────────────────────────
+
+def _is_solved_by_student(db, user_id, problem_url, problem_name):
+    """
+    Check whether a student has already solved the given problem using the
+    existing submissions table.  We match on URL first (most reliable), then
+    fall back to a case-insensitive name match.
+    """
+    if problem_url and problem_url.strip():
+        row = db.execute(
+            "SELECT id FROM submissions WHERE user_id=%s AND problem_url=%s LIMIT 1",
+            (user_id, problem_url.strip())
+        ).fetchone()
+        if row:
+            return True
+    if problem_name and problem_name.strip():
+        row = db.execute(
+            "SELECT id FROM submissions WHERE user_id=%s AND LOWER(problem_name)=LOWER(%s) LIMIT 1",
+            (user_id, problem_name.strip())
+        ).fetchone()
+        if row:
+            return True
+    return False
+
+
+def _assign_one(db, admin_id, user_id, pname, purl, diff, plat, topic, note, due, assigned_date):
+    """
+    Create one mentor_assignment for (admin_id, user_id, purl/pname).
+    - Skips if the exact same problem is already assigned to this student by
+      this mentor (duplicate prevention).
+    - Sets completed=1 immediately if the student has already solved it.
+    Returns 'created', 'duplicate', or 'already_solved'.
+    """
+    # Duplicate check: same problem (by URL or name) already assigned by same mentor
+    if purl and purl.strip():
+        dup = db.execute(
+            "SELECT id FROM mentor_assignments WHERE admin_id=%s AND user_id=%s AND problem_url=%s LIMIT 1",
+            (admin_id, user_id, purl.strip())
+        ).fetchone()
+    else:
+        dup = db.execute(
+            "SELECT id FROM mentor_assignments WHERE admin_id=%s AND user_id=%s AND LOWER(problem_name)=LOWER(%s) LIMIT 1",
+            (admin_id, user_id, pname.strip())
+        ).fetchone()
+    if dup:
+        return "duplicate"
+
+    # Check if already solved
+    already_solved = _is_solved_by_student(db, user_id, purl, pname)
+    completed = 1 if already_solved else 0
+
+    db.execute("""
+        INSERT INTO mentor_assignments
+        (admin_id,user_id,problem_name,problem_url,difficulty,
+         platform,topic,note,assigned_date,due_date,completed)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    """, (admin_id, user_id, pname, purl, diff, plat,
+          topic, note, assigned_date, due, completed))
+    return "already_solved" if already_solved else "created"
+
+
 @app.route("/admin/mentor", methods=["GET", "POST"])
 @login_required
 @admin_required
 def mentor():
     if request.method == "POST":
-        uid   = int(request.form.get("user_id", 0))
+        assign_all = request.form.get("assign_all", "0") == "1"
+        uid_raw    = request.form.get("user_id", "0")
         pname = sanitize(request.form.get("problem_name", ""), 200)
         purl  = sanitize(request.form.get("problem_url", ""), 300)
         diff  = request.form.get("difficulty", "Medium")
@@ -168,16 +229,53 @@ def mentor():
         topic = sanitize(request.form.get("topic", ""), 64)
         note  = sanitize(request.form.get("note", ""), 500)
         due   = request.form.get("due_date", "")
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        if not pname:
+            return jsonify({"success": False, "message": "Problem name is required."}), 400
+
         with get_db() as db:
-            db.execute("""
-                INSERT INTO mentor_assignments
-                (admin_id,user_id,problem_name,problem_url,difficulty,
-                 platform,topic,note,assigned_date,due_date,completed)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0)
-            """, (current_user.id, uid, pname, purl, diff, plat,
-                  topic, note, datetime.now().strftime("%Y-%m-%d"), due))
-            db.commit()
-        return jsonify({"success": True, "message": "Problem assigned."})
+            if assign_all:
+                # Assign to ALL active non-admin students
+                students = db.execute(
+                    "SELECT id FROM users WHERE status='active' AND is_admin=0"
+                ).fetchall()
+                created = dupes = solved = 0
+                for s in students:
+                    result = _assign_one(db, current_user.id, s["id"],
+                                         pname, purl, diff, plat, topic, note, due, today)
+                    if result == "created":        created += 1
+                    elif result == "duplicate":    dupes   += 1
+                    elif result == "already_solved": created += 1; solved += 1
+                db.commit()
+                msg = f"Assigned to {created} student(s)."
+                if dupes:   msg += f" {dupes} already assigned (skipped)."
+                if solved:  msg += f" {solved} already solved (marked Completed)."
+                return jsonify({"success": True, "message": msg})
+            else:
+                try:
+                    uid = int(uid_raw)
+                except (ValueError, TypeError):
+                    return jsonify({"success": False, "message": "Invalid student."}), 400
+                if uid <= 0:
+                    return jsonify({"success": False, "message": "Select a student."}), 400
+
+                # Ownership check: student must be active and not admin
+                student = db.execute(
+                    "SELECT id FROM users WHERE id=%s AND status='active' AND is_admin=0",
+                    (uid,)
+                ).fetchone()
+                if not student:
+                    return jsonify({"success": False, "message": "Student not found or not eligible."}), 404
+
+                result = _assign_one(db, current_user.id, uid,
+                                      pname, purl, diff, plat, topic, note, due, today)
+                db.commit()
+                if result == "duplicate":
+                    return jsonify({"success": False, "message": "This problem is already assigned to that student."}), 409
+                if result == "already_solved":
+                    return jsonify({"success": True, "message": "Problem assigned and marked Completed (student already solved it)."})
+                return jsonify({"success": True, "message": "Problem assigned."})
 
     with get_db() as db:
         users = db.execute(
@@ -187,26 +285,51 @@ def mentor():
             SELECT ma.*,u.username
             FROM mentor_assignments ma
             JOIN users u ON ma.user_id=u.id
-            ORDER BY ma.assigned_date DESC LIMIT 50
-        """).fetchall()
+            WHERE ma.admin_id=%s
+            ORDER BY ma.assigned_date DESC LIMIT 100
+        """, (current_user.id,)).fetchall()
         custom_probs = db.execute(
             "SELECT * FROM custom_problems ORDER BY created_at DESC"
         ).fetchall()
 
-        # Build user_progress: total assigned vs completed per user
+        # Auto-refresh completed status for all this mentor's assignments
+        # so the view is always in sync with actual submissions
+        for a in assignments:
+            if not a["completed"]:
+                solved = _is_solved_by_student(db, a["user_id"], a["problem_url"], a["problem_name"])
+                if solved:
+                    db.execute(
+                        "UPDATE mentor_assignments SET completed=1 WHERE id=%s",
+                        (a["id"],)
+                    )
+        db.commit()
+
+        # Re-fetch after auto-refresh
+        assignments = db.execute("""
+            SELECT ma.*,u.username
+            FROM mentor_assignments ma
+            JOIN users u ON ma.user_id=u.id
+            WHERE ma.admin_id=%s
+            ORDER BY ma.assigned_date DESC LIMIT 100
+        """, (current_user.id,)).fetchall()
+
+        # Build user_progress: total assigned vs completed per user (mentor-scoped)
         user_progress = {}
         for u in users:
             uid = u["id"]
             total_assigned = db.execute(
-                "SELECT COUNT(*) as c FROM mentor_assignments WHERE user_id=%s", (uid,)
+                "SELECT COUNT(*) as c FROM mentor_assignments WHERE user_id=%s AND admin_id=%s",
+                (uid, current_user.id)
             ).fetchone()["c"]
             total_completed = db.execute(
-                "SELECT COUNT(*) as c FROM mentor_assignments WHERE user_id=%s AND completed=1", (uid,)
+                "SELECT COUNT(*) as c FROM mentor_assignments WHERE user_id=%s AND admin_id=%s AND completed=1",
+                (uid, current_user.id)
             ).fetchone()["c"]
             pct = int((total_completed / total_assigned * 100)) if total_assigned else 0
             user_progress[uid] = {
                 "total": total_assigned,
                 "completed": total_completed,
+                "done": total_completed,
                 "pct": pct
             }
 
@@ -216,6 +339,55 @@ def mentor():
         "custom_probs": rows_to_dicts(custom_probs),
         "user_progress": user_progress
     })
+
+
+@app.route("/admin/mentor/refresh_status", methods=["POST"])
+@login_required
+@admin_required
+def mentor_refresh_status():
+    """
+    Re-check all pending assignments for this mentor against actual submissions
+    and mark them completed if already solved.
+    """
+    with get_db() as db:
+        pending = db.execute(
+            "SELECT id,user_id,problem_url,problem_name FROM mentor_assignments WHERE admin_id=%s AND completed=0",
+            (current_user.id,)
+        ).fetchall()
+        updated = 0
+        for a in pending:
+            if _is_solved_by_student(db, a["user_id"], a["problem_url"], a["problem_name"]):
+                db.execute("UPDATE mentor_assignments SET completed=1 WHERE id=%s", (a["id"],))
+                updated += 1
+        db.commit()
+    return jsonify({"success": True, "updated": updated,
+                    "message": f"{updated} assignment(s) updated to Completed."})
+
+
+@app.route("/admin/mentor/approve_all", methods=["POST"])
+@login_required
+@admin_required
+def mentor_approve_all():
+    """
+    Mark all pending user-verification requests as approved (admin action).
+    Only approves 'pending' status users.  Admin ownership is implicit since
+    all admins can verify users.
+    """
+    with get_db() as db:
+        pending_users = db.execute(
+            "SELECT id,username FROM users WHERE status='pending'"
+        ).fetchall()
+        count = 0
+        for u in pending_users:
+            db.execute(
+                "UPDATE users SET is_verified=1, status='active' WHERE id=%s",
+                (u["id"],)
+            )
+            log_admin("verify_user", u["username"], "approve (approve_all)")
+            count += 1
+        db.commit()
+    return jsonify({"success": True, "approved": count,
+                    "message": f"{count} pending user(s) approved."})
 
 
 # ── Custom Problems ───────────────────────────────────────────────────────────

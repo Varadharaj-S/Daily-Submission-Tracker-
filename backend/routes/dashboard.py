@@ -20,6 +20,25 @@ from utils.helpers import get_counts, rows_to_dicts
 from services.sync_engine import get_dashboard_data, generate_daily_challenges
 
 
+def _is_solved_by_student_db(db, user_id, problem_url, problem_name):
+    """Check submissions table to see if a student has solved the problem."""
+    if problem_url and problem_url.strip():
+        row = db.execute(
+            "SELECT id FROM submissions WHERE user_id=? AND problem_url=? LIMIT 1",
+            (user_id, problem_url.strip())
+        ).fetchone()
+        if row:
+            return True
+    if problem_name and problem_name.strip():
+        row = db.execute(
+            "SELECT id FROM submissions WHERE user_id=? AND LOWER(problem_name)=LOWER(?) LIMIT 1",
+            (user_id, problem_name.strip())
+        ).fetchone()
+        if row:
+            return True
+    return False
+
+
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 @app.route("/dashboard")
 @login_required
@@ -50,9 +69,9 @@ def dashboard():
     data = get_dashboard_data(subs)
 
     # ADD COUNTS
-    total, solved = get_counts(current_user.id)
+    total, total_solved = get_counts(current_user.id)
     data["total"] = total
-    data["solved"] = solved
+    data["solved"] = total_solved
 
     # EXTRA DATA
     data["following_count"] = fol_count
@@ -64,10 +83,26 @@ def dashboard():
     # Daily challenges
     challenges = generate_daily_challenges(current_user.id, get_db)
 
-    # Mentor tasks
+    # Mentor tasks — auto-refresh completed status from actual submissions
     with get_db() as db:
+        all_tasks = db.execute(
+            "SELECT * FROM mentor_assignments WHERE user_id=?",
+            (current_user.id,)
+        ).fetchall()
+        # Auto-complete any assignment the student has already solved
+        for t in all_tasks:
+            if not t["completed"]:
+                is_solved = _is_solved_by_student_db(db, current_user.id,
+                                                      t["problem_url"], t["problem_name"])
+                if is_solved:
+                    db.execute(
+                        "UPDATE mentor_assignments SET completed=1 WHERE id=? AND user_id=?",
+                        (t["id"], current_user.id)
+                    )
+        db.commit()
+        # Re-fetch after auto-refresh so frontend gets correct state
         mentor_tasks = db.execute(
-            "SELECT * FROM mentor_assignments WHERE user_id=? AND completed=0",
+            "SELECT * FROM mentor_assignments WHERE user_id=? ORDER BY assigned_date DESC",
             (current_user.id,)
         ).fetchall()
 
@@ -116,6 +151,15 @@ def complete_challenge(cid):
 @verified_required
 def complete_mentor(mid):
     with get_db() as db:
+        # Security: only allow student to mark their OWN assignment complete
+        task = db.execute(
+            "SELECT id, completed FROM mentor_assignments WHERE id=? AND user_id=?",
+            (mid, current_user.id)
+        ).fetchone()
+        if not task:
+            return jsonify({"success": False, "message": "Assignment not found."}), 404
+        if task["completed"]:
+            return jsonify({"success": True, "message": "Already completed."})
         db.execute(
             "UPDATE mentor_assignments SET completed=1 WHERE id=? AND user_id=?",
             (mid, current_user.id)

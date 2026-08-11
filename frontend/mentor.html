@@ -20,6 +20,8 @@
 .pc-meta{font-size:.74rem;color:var(--muted);display:flex;justify-content:space-between}
 .pc-pct{font-family:var(--mono);font-weight:700;font-size:.9rem}
 .status-overdue{background:rgba(239,68,68,.15);color:#f87171}
+.row-completed td{opacity:.65}
+.row-completed .problem-link{text-decoration:line-through;color:var(--muted)}
 .feedback-form{margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-start}
 .feedback-form textarea{flex:1;min-width:200px;background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:var(--radius);padding:.4rem .6rem;font-size:.8rem;resize:vertical;font-family:inherit}
 .star-rating{display:flex;gap:.2rem;cursor:pointer}
@@ -74,13 +76,36 @@ document.addEventListener("submit", async (e) => {
   if (e.target.classList.contains("feedbackForm")) {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target).entries());
-    // NOTE: no /add_mentor_feedback endpoint exists in the backend (none
-    // did in the original monolith either — this form had no working
-    // handler there, same as here).
     const d = await apiPostForm("/add_mentor_feedback", fd);
     showToast(d.message || "Feedback sent.", d.success !== false ? "success" : "error");
   }
 });
+
+async function assignToAll() {
+  const form = document.getElementById("assignForm");
+  const fd = Object.fromEntries(new FormData(form).entries());
+  const pname = fd.problem_name || "";
+  if (!pname.trim()) { showToast("Enter a problem name first.", "error"); return; }
+  if (!confirm(`Assign "${pname}" to ALL students?`)) return;
+  fd.assign_all = "1";
+  fd.user_id = "0";
+  const d = await apiPostForm("/admin/mentor", fd);
+  showToast(d.message || (d.success ? "Done!" : "Failed"), d.success ? "success" : "error");
+  if (d.success) location.reload();
+}
+
+async function refreshAssignmentStatuses() {
+  const d = await apiPostJSON("/admin/mentor/refresh_status", {});
+  showToast(d.message || "Refreshed.", d.success ? "success" : "error");
+  if (d.success) location.reload();
+}
+
+async function approveAllUsers() {
+  if (!confirm("Approve ALL pending user accounts?")) return;
+  const d = await apiPostJSON("/admin/mentor/approve_all", {});
+  showToast(d.message || (d.success ? "Done!" : "Failed"), d.success ? "success" : "error");
+  if (d.success) location.reload();
+}
 
 (async () => {
   const me = await requireAuth({ admin: true });
@@ -161,7 +186,12 @@ document.addEventListener("submit", async (e) => {
           </div>
           <div class="form-group"><label class="form-label">Note to Student</label>
             <textarea class="form-input" name="note" rows="2" placeholder="Hints or instructions..." maxlength="500"></textarea></div>
-          <button type="submit" class="btn btn-primary" style="margin-top:.5rem">Assign Problem →</button>
+          <div style="display:flex;gap:.6rem;margin-top:.5rem;flex-wrap:wrap">
+            <button type="submit" class="btn btn-primary">Assign Problem →</button>
+            <button type="button" class="btn btn-outline" onclick="assignToAll()" title="Assign this problem to all students at once">
+              👥 Assign to All Students
+            </button>
+          </div>
         </form>
         ${quickAssign}
       </div>
@@ -190,24 +220,40 @@ document.addEventListener("submit", async (e) => {
   </div>
 
   <div class="table-card" style="margin-top:1rem">
-    <div class="card-header"><h3>📋 All Assignments</h3><span class="count-pill">${(assignments || []).length}</span></div>
+    <div class="card-header" style="flex-wrap:wrap;gap:.5rem">
+      <div style="display:flex;align-items:center;gap:.6rem">
+        <h3>📋 All Assignments</h3>
+        <span class="count-pill">${(assignments || []).length}</span>
+      </div>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <button class="btn-sm btn-outline" onclick="refreshAssignmentStatuses()" title="Re-check submissions and update Completed status">
+          🔄 Refresh Status
+        </button>
+        <button class="btn-sm btn-outline" onclick="approveAllUsers()" title="Approve all pending user registrations" style="border-color:#34d399;color:#34d399">
+          ✓ Approve All Users
+        </button>
+      </div>
+    </div>
     <div class="table-wrap">
       <table>
         <thead><tr><th>Student</th><th>Problem</th><th>Platform</th><th>Difficulty</th><th>Topic</th><th>Due</th><th>Progress</th><th>Status</th><th>Action</th></tr></thead>
         <tbody>
           ${(assignments && assignments.length) ? assignments.map(a => {
-            const overdue = !a.completed && a.due_date && a.due_date < today;
-            const statusBadge = a.completed ? `<span class="status-badge status-active">✅ Done</span>`
-              : overdue ? `<span class="status-badge status-overdue">🔴 Overdue</span>`
-              : `<span class="status-badge status-pending">🟡 Pending</span>`;
-            return `<tr>
+            const isCompleted = a.completed == 1 || a.completed === true;
+            const overdue = !isCompleted && a.due_date && a.due_date < today;
+            const statusBadge = isCompleted
+              ? `<span class="status-badge status-active">✅ Completed</span>`
+              : overdue
+                ? `<span class="status-badge status-overdue">🔴 Overdue</span>`
+                : `<span class="status-badge status-pending">🟡 Pending</span>`;
+            return `<tr class="${isCompleted ? 'row-completed' : ''}">
               <td class="mono">${a.username}</td>
               <td class="problem-name">${a.problem_url ? `<a href="${a.problem_url}" target="_blank" class="problem-link">${a.problem_name} ↗</a>` : a.problem_name}</td>
               <td><span class="platform-badge platform-${platformCls(a.platform)}">${a.platform}</span></td>
               <td><span class="diff-badge diff-${(a.difficulty || "").toLowerCase()}">${a.difficulty}</span></td>
               <td><span class="tag-pill">${a.topic || "—"}</span></td>
               <td class="mono small">${a.due_date || "—"}</td>
-              <td><div class="progress-bar-wrap" style="min-width:80px"><div class="progress-bar-fill ${a.completed ? "fill-green" : "fill-yellow"}" style="width:${a.completed ? "100" : "0"}%"></div></div></td>
+              <td><div class="progress-bar-wrap" style="min-width:80px"><div class="progress-bar-fill ${isCompleted ? "fill-green" : overdue ? "fill-red" : "fill-yellow"}" style="width:${isCompleted ? "100" : "0"}%"></div></div></td>
               <td>${statusBadge}</td>
               <td><button class="btn-sm btn-outline" onclick="toggleFeedback(${a.id})">💬 Feedback</button></td>
             </tr>
