@@ -204,25 +204,41 @@ function renderDashboard() {
   </div>` : ""}
 
   ${(mentor_tasks && mentor_tasks.length) ? (() => {
-    const pendingTasks = mentor_tasks.filter(t => !t.completed);
-    const completedCount = mentor_tasks.filter(t => t.completed).length;
-    if (!pendingTasks.length && !completedCount) return "";
+    const _today = new Date().toISOString().slice(0, 10);
+    const completedTasks = mentor_tasks.filter(t => t.completed == 1 || t.completed === true);
+    const overdueTasks   = mentor_tasks.filter(t => !(t.completed == 1 || t.completed === true) && t.due_date && t.due_date < _today);
+    const pendingTasks   = mentor_tasks.filter(t => !(t.completed == 1 || t.completed === true) && !(t.due_date && t.due_date < _today));
+    const actionable     = [...overdueTasks, ...pendingTasks]; // show overdue first
+    if (!actionable.length && !completedTasks.length) return "";
+    const borderColor = overdueTasks.length ? "#f87171" : completedTasks.length === mentor_tasks.length ? "#34d399" : "#fbbf24";
     return `
-  <div class="table-card" style="padding:1rem;margin-bottom:1rem;border-left:3px solid #fbbf24">
+  <div class="table-card" style="padding:1rem;margin-bottom:1rem;border-left:3px solid ${borderColor}">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem">
       <h3 style="margin:0;font-size:.9rem">📋 My Mentor Tasks</h3>
-      <span style="font-size:.78rem;color:var(--muted)">${pendingTasks.length} pending · ${completedCount} completed · <a href="#mentor-section" style="color:var(--accent)">View all</a></span>
+      <span style="font-size:.78rem;color:var(--muted)">
+        ${[
+          pendingTasks.length   ? `${pendingTasks.length} pending`    : "",
+          overdueTasks.length   ? `${overdueTasks.length} overdue`    : "",
+          completedTasks.length ? `${completedTasks.length} completed` : "",
+        ].filter(Boolean).join(" · ")}
+        · <a href="#mentor-section" style="color:var(--accent)">View all</a>
+      </span>
     </div>
-    ${pendingTasks.slice(0, 3).map(t => `
+    ${actionable.slice(0, 3).map(t => {
+      const _over = t.due_date && t.due_date < _today;
+      return `
       <div style="display:flex;align-items:center;gap:.75rem;padding:.4rem 0;border-bottom:1px solid rgba(255,255,255,.05)">
         <span class="diff-badge diff-${(t.difficulty || "").toLowerCase()}" style="flex-shrink:0">${t.difficulty}</span>
         <span style="flex:1;font-size:.83rem;font-weight:600">
           ${t.problem_url ? `<a href="${t.problem_url}" target="_blank" style="color:var(--text)">${t.problem_name}</a>` : t.problem_name}
         </span>
-        ${t.due_date ? `<span style="font-size:.74rem;color:var(--muted);font-family:var(--mono)">Due ${t.due_date}</span>` : ""}
-        <span class="status-badge status-pending" style="font-size:.68rem;padding:.1rem .4rem">🟡 Pending</span>
-      </div>`).join("")}
-    ${pendingTasks.length === 0 ? `<div style="font-size:.83rem;color:#34d399;text-align:center;padding:.4rem 0">🎉 All tasks completed!</div>` : ""}
+        ${_over
+          ? `<span style="font-size:.7rem;color:#f87171;font-family:var(--mono)">🔴 ${t.due_date}</span>`
+          : t.due_date ? `<span style="font-size:.74rem;color:var(--muted);font-family:var(--mono)">Due ${t.due_date}</span>` : ""}
+        <span class="status-badge" style="font-size:.68rem;padding:.1rem .4rem;${_over ? 'background:rgba(248,113,113,.15);color:#f87171' : 'background:rgba(251,191,36,.1);color:#fbbf24'}">${_over ? "🔴 Overdue" : "🟡 Pending"}</span>
+      </div>`;
+    }).join("")}
+    ${actionable.length === 0 ? `<div style="font-size:.83rem;color:#34d399;text-align:center;padding:.4rem 0">🎉 All tasks completed!</div>` : ""}
   </div>`;
   })() : ""}
 
@@ -253,36 +269,79 @@ function renderDashboard() {
   <div class="table-card">
     <div class="card-header">
       <h3>🎓 Mentor Assignments</h3>
-      <span class="card-tag">${(mentor_tasks || []).filter(t => !t.completed).length} pending · ${(mentor_tasks || []).filter(t => t.completed).length} completed</span>
+      <span class="card-tag">
+        ${(() => {
+          const today = new Date().toISOString().slice(0, 10);
+          const completed = (mentor_tasks || []).filter(t => t.completed == 1 || t.completed === true).length;
+          const overdue   = (mentor_tasks || []).filter(t => !(t.completed == 1 || t.completed === true) && t.due_date && t.due_date < today).length;
+          const pending   = (mentor_tasks || []).length - completed - overdue;
+          return [
+            pending   > 0 ? `${pending} pending`   : "",
+            overdue   > 0 ? `${overdue} overdue`   : "",
+            completed > 0 ? `${completed} completed` : "",
+          ].filter(Boolean).join(" · ") || "none";
+        })()}
+      </span>
     </div>
     <div class="challenges-list">
       ${(mentor_tasks && mentor_tasks.length) ? mentor_tasks.map(t => {
         const today = new Date().toISOString().slice(0, 10);
         const isCompleted = t.completed == 1 || t.completed === true;
-        const isOverdue = !isCompleted && t.due_date && t.due_date < today;
+        const isOverdue   = !isCompleted && t.due_date && t.due_date < today;
+
+        /* ── COMPLETED ─────────────────────────────────────────────── */
         if (isCompleted) {
-          return `<div class="challenge-item challenge-done" id="mt-${t.id}" style="opacity:.7">
+          return `<div class="challenge-item challenge-done" id="mt-${t.id}" style="opacity:.65">
             <div class="challenge-check"><span class="check-done" title="Already solved">✓</span></div>
             <div class="challenge-body" style="flex:1">
-              ${t.problem_url ? `<a href="${t.problem_url}" target="_blank" class="challenge-name" style="text-decoration:line-through;color:var(--muted)">${t.problem_name} ↗</a>` : `<span class="challenge-name" style="text-decoration:line-through;color:var(--muted)">${t.problem_name}</span>`}
+              ${t.problem_url
+                ? `<a href="${t.problem_url}" target="_blank" class="challenge-name" style="text-decoration:line-through;color:var(--muted)">${t.problem_name} ↗</a>`
+                : `<span class="challenge-name" style="text-decoration:line-through;color:var(--muted)">${t.problem_name}</span>`}
               <div class="challenge-meta">
                 <span class="diff-badge diff-${(t.difficulty || "").toLowerCase()}">${t.difficulty}</span>
-                <span class="tag-pill">${t.topic}</span>
-                <span class="status-badge status-active" style="font-size:.7rem;padding:.1rem .5rem">✅ Completed</span>
+                ${t.topic ? `<span class="tag-pill">${t.topic}</span>` : ""}
+                <span class="status-badge status-active" style="font-size:.68rem;padding:.1rem .45rem">✅ Completed</span>
+              </div>
+              ${t.note ? `<p class="mentor-note" style="opacity:.6">📝 ${t.note}</p>` : ""}
+            </div>
+          </div>`;
+        }
+
+        /* ── OVERDUE ───────────────────────────────────────────────── */
+        if (isOverdue) {
+          return `<div class="challenge-item challenge-overdue" id="mt-${t.id}">
+            <div class="challenge-check">
+              <button class="check-btn" onclick="completeMentor(${t.id})" title="Mark as solved" style="border-color:#f87171;color:#f87171">○</button>
+            </div>
+            <div class="challenge-body" style="flex:1">
+              ${t.problem_url
+                ? `<a href="${t.problem_url}" target="_blank" class="challenge-name">${t.problem_name} ↗</a>`
+                : `<span class="challenge-name">${t.problem_name}</span>`}
+              <div class="challenge-meta">
+                <span class="diff-badge diff-${(t.difficulty || "").toLowerCase()}">${t.difficulty}</span>
+                ${t.topic ? `<span class="tag-pill">${t.topic}</span>` : ""}
+                <span class="tag-pill overdue-pill">🔴 Overdue: ${t.due_date}</span>
+                <span class="status-badge" style="background:rgba(248,113,113,.15);color:#f87171;font-size:.68rem;padding:.1rem .45rem">🔴 Overdue</span>
               </div>
               ${t.note ? `<p class="mentor-note">📝 ${t.note}</p>` : ""}
             </div>
           </div>`;
         }
-        return `<div class="challenge-item ${isOverdue ? "challenge-overdue" : ""}" id="mt-${t.id}">
-          <div class="challenge-check"><button class="check-btn" onclick="completeMentor(${t.id})" title="Mark as solved">○</button></div>
+
+        /* ── PENDING ───────────────────────────────────────────────── */
+        return `<div class="challenge-item" id="mt-${t.id}">
+          <div class="challenge-check">
+            <button class="check-btn" onclick="completeMentor(${t.id})" title="Mark as solved">○</button>
+          </div>
           <div class="challenge-body" style="flex:1">
-            ${t.problem_url ? `<a href="${t.problem_url}" target="_blank" class="challenge-name">${t.problem_name} ↗</a>` : `<span class="challenge-name">${t.problem_name}</span>`}
+            ${t.problem_url
+              ? `<a href="${t.problem_url}" target="_blank" class="challenge-name">${t.problem_name} ↗</a>`
+              : `<span class="challenge-name">${t.problem_name}</span>`}
             <div class="challenge-meta">
               <span class="diff-badge diff-${(t.difficulty || "").toLowerCase()}">${t.difficulty}</span>
-              <span class="tag-pill">${t.topic}</span>
-              ${t.due_date ? `<span class="tag-pill ${isOverdue ? "overdue-pill" : ""}">${isOverdue ? "🔴 Overdue:" : "Due:"} ${t.due_date}</span>` : ""}
-              <span class="status-badge status-pending" style="font-size:.7rem;padding:.1rem .5rem">🟡 Pending</span>
+              ${t.topic ? `<span class="tag-pill">${t.topic}</span>` : ""}
+              ${t.due_date ? `<span class="tag-pill">Due: ${t.due_date}</span>` : ""}
+              <span class="status-badge status-pending" style="font-size:.68rem;padding:.1rem .45rem">🟡 Pending</span>
             </div>
             ${t.note ? `<p class="mentor-note">📝 ${t.note}</p>` : ""}
           </div>

@@ -100,11 +100,22 @@ def dashboard():
                         (t["id"], current_user.id)
                     )
         db.commit()
-        # Re-fetch after auto-refresh so frontend gets correct state
-        mentor_tasks = db.execute(
-            "SELECT * FROM mentor_assignments WHERE user_id=? ORDER BY assigned_date DESC",
+        # Re-fetch after auto-refresh so frontend gets correct state.
+        # Deduplicate: if same problem assigned by multiple mentors or twice,
+        # keep the one with highest completed value (1 beats 0), then latest id.
+        all_raw = db.execute(
+            "SELECT * FROM mentor_assignments WHERE user_id=? ORDER BY completed DESC, id DESC",
             (current_user.id,)
         ).fetchall()
+        # Python-side dedup keyed on (problem_url or problem_name)
+        seen = set()
+        deduped = []
+        for row in all_raw:
+            key = (row["problem_url"] or "").strip() or (row["problem_name"] or "").strip().lower()
+            if key not in seen:
+                seen.add(key)
+                deduped.append(row)
+        mentor_tasks = deduped
 
     # Sheet URL
     sheet_url = None
