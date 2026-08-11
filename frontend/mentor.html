@@ -35,6 +35,10 @@
 .solved-yes{color:#34d399;font-weight:700}
 .solved-no{color:#f87171;font-weight:700}
 .search-summary{font-size:.8rem;color:var(--muted);margin-bottom:.75rem}
+.search-summary-card{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:.9rem 1.1rem;margin-top:.5rem}
+.search-summary-count{font-size:.95rem}
+#searchRefreshBtn.spinning{animation:spin .8s linear infinite}
+@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
@@ -204,34 +208,59 @@ async function runProblemSearch(e) {
   const d = await apiGet(`/admin/mentor/search_problem?problem_name=${encodeURIComponent(pname)}&problem_url=${encodeURIComponent(purl)}`);
   if (!d.success) { showToast(d.message || "Search failed.", "error"); return; }
   searchResults = d;
-  searchPage = 1;
+  lastSearch = { pname, purl };
   renderSearchResults();
+}
+
+async function removeRegnColumn() {
+  const btn = document.getElementById("removeRegnBtn");
+  btn.disabled = true;
+  btn.textContent = "Removing...";
+  try {
+    const d = await apiPostJSON("/admin/mentor/remove_regn_column", {});
+    showToast(d.removed ? "Regn Num column removed from the sheet." : (d.success ? "Already removed — nothing to do." : (d.error || "Failed.")), d.success ? "success" : "error");
+  } catch (e) {
+    showToast("Failed — network or server error.", "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🗑️ Remove Regn Num Column";
+  }
+}
+
+let lastSearch = null; // { pname, purl } — so the refresh icon can re-run the same search
+
+async function refreshSearchResult() {
+  if (!lastSearch) return;
+  const btn = document.getElementById("searchRefreshBtn");
+  if (btn) { btn.disabled = true; btn.classList.add("spinning"); }
+  try {
+    const d = await apiGet(`/admin/mentor/search_problem?problem_name=${encodeURIComponent(lastSearch.pname)}&problem_url=${encodeURIComponent(lastSearch.purl)}`);
+    if (!d.success) { showToast(d.message || "Refresh failed.", "error"); return; }
+    searchResults = d;
+    renderSearchResults();
+    showToast("Refreshed — synced to sheet.", "success");
+  } catch (e) {
+    showToast("Refresh failed — network or server error.", "error");
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove("spinning"); }
+  }
 }
 
 function renderSearchResults() {
   const el = document.getElementById("searchResultsWrap");
   if (!el) return;
   if (!searchResults) { el.innerHTML = ""; return; }
-  const { results, total, solved_count } = searchResults;
-  const { items, page, total_pages } = paginateArray(results, searchPage, PER_PAGE);
+  const { total, solved_count } = searchResults;
   el.innerHTML = `
-    <p class="search-summary">${solved_count} / ${total} students have solved this problem.</p>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Student Name</th><th>Register Number</th><th>Problem Name</th><th>Problem Link</th><th>Solved</th></tr></thead>
-        <tbody>
-          ${items.length ? items.map(r => `
-            <tr>
-              <td class="mono">${r.username}${r.full_name ? ` <span class="muted small">(${r.full_name})</span>` : ""}</td>
-              <td class="mono small">${r.reg_no || "—"}</td>
-              <td class="problem-name">${r.problem_name || "—"}</td>
-              <td class="mono small">${r.problem_url ? `<a href="${r.problem_url}" target="_blank" class="problem-link">Open ↗</a>` : "—"}</td>
-              <td>${r.solved ? `<span class="solved-yes">✅ Yes</span>` : `<span class="solved-no">❌ No</span>`}</td>
-            </tr>`).join("") : `<tr><td colspan="5" class="empty-state" style="padding:2rem;text-align:center">No students found.</td></tr>`}
-        </tbody>
-      </table>
-    </div>
-    ${paginationHTML(page, total_pages, "goSearchPage")}`;
+    <div class="search-summary-card">
+      <div class="search-summary-count">
+        <span class="solved-yes" style="font-size:1.4rem">${solved_count}</span>
+        <span class="muted"> / ${total} students solved this problem</span>
+      </div>
+      <button type="button" id="searchRefreshBtn" class="btn-sm btn-outline" onclick="refreshSearchResult()" title="Re-check submissions for this problem and re-sync the sheet">
+        🔄 Refresh
+      </button>
+    </div>`;
 }
 
 (async () => {
@@ -369,6 +398,9 @@ function renderSearchResults() {
       <div style="display:flex;gap:.5rem;flex-wrap:wrap">
         <button class="btn-sm btn-outline" onclick="refreshAssignmentStatuses()" title="Re-check submissions and update Completed status">
           🔄 Refresh Status
+        </button>
+        <button id="removeRegnBtn" class="btn-sm btn-outline" onclick="removeRegnColumn()" title="One-time cleanup: deletes the old Regn Num column from the roster sheet">
+          🗑️ Remove Regn Num Column
         </button>
       </div>
     </div>

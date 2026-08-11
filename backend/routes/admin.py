@@ -21,7 +21,7 @@ from flask_login import current_user
 from services.sync_engine import sync_user_data
 from workers.backup_worker import run_backup, run_restore, list_backups
 from normal_sync import rebuild_user_sheet_from_db, backfill_missing_rows_from_db
-from services.mentor_sheet_sync import sync_assignment_to_sheet, resync_all as sheet_resync_all
+from services.mentor_sheet_sync import sync_assignment_to_sheet, resync_all as sheet_resync_all, remove_regn_num_column
 
 
 # ── Admin Dashboard ────────────────────────────────────────────────────────────
@@ -404,6 +404,16 @@ def mentor():
         "custom_probs": rows_to_dicts(custom_probs),
         "user_progress": user_progress
     })
+
+
+@app.route("/admin/mentor/remove_regn_column", methods=["POST"])
+@login_required
+@admin_required
+def mentor_remove_regn_column():
+    """One-click cleanup: deletes the old 'Regn Num' column from the
+    roster sheet if it's still there. Safe to click more than once."""
+    result = remove_regn_num_column(get_db)
+    return jsonify(result)
 
 
 @app.route("/admin/mentor/refresh_status", methods=["POST"])

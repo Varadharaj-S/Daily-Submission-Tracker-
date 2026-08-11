@@ -1,8 +1,9 @@
 """
 services/mentor_sheet_sync.py — mirrors mentor-assigned problems into the
 master roster tab you already track by hand (the "SkillRack Sir Class
-Track"-style tab shown in your screenshot: Regn Num | Reg No | Name |
+Track"-style tab shown in your screenshot: Reg No | Name |
 Branch | Solved | <one column per problem, dropdown Solved/Not Solved>).
+(Regn Num column removed — Reg No is the only ID column now.)
 
 WHY THIS FILE EXISTS
 ---------------------
@@ -84,7 +85,7 @@ def _client():
     return gspread.authorize(creds)
 
 
-ROSTER_BASE_HEADERS = ["Regn Num", "Reg No", "Name", "Branch"]  # no summary "Solved" column — each problem column carries its own status
+ROSTER_BASE_HEADERS = ["Reg No", "Name", "Branch"]  # Regn Num column removed — Reg No is the key column; no summary "Solved" column — each problem column carries its own status
 
 
 def _import_students_into_new_roster(ws, get_db):
@@ -99,7 +100,7 @@ def _import_students_into_new_roster(ws, get_db):
             "SELECT reg_no, full_name, branch FROM users "
             "WHERE status='active' AND is_admin=0 ORDER BY full_name ASC"
         ).fetchall()
-    rows = [["", s["reg_no"] or "", s["full_name"] or "", s["branch"] or ""] for s in students]
+    rows = [[s["reg_no"] or "", s["full_name"] or "", s["branch"] or ""] for s in students]
     if rows:
         ws.update(f"A{DATA_START_ROW}", rows, value_input_option="USER_ENTERED")
     return len(rows)
@@ -356,6 +357,32 @@ def _apply_conditional_colors(ws, col_idx):
     ws.spreadsheet.batch_update(requests_body)
 
 
+def remove_regn_num_column(get_db=None):
+    """
+    One-off migration for sheets created before the Regn Num column was
+    dropped from ROSTER_BASE_HEADERS: finds a "Regn Num" (or "Register
+    Number" / "Regn. Num" etc.) header still sitting in the live sheet
+    and deletes that whole column. Safe to call repeatedly — a no-op once
+    the column is gone. Everything else (problem columns, Reg No
+    matching) is found by header text, not position, so this doesn't
+    disturb anything to the right of the deleted column.
+    """
+    with _lock:
+        try:
+            ws = get_or_create_roster_ws(get_db)
+            headers = _header_row_values(ws)
+            for i, h in enumerate(headers, start=1):
+                # Only ever matches "Regn Num" / "Regn. Num" / "Register Num(ber)" —
+                # deliberately does NOT match "Reg No", which stays as the key column.
+                if re.sub(r"[^a-z]", "", (h or "").lower()) in ("regnnum", "registernum", "registernumber"):
+                    ws.delete_columns(i)
+                    return {"success": True, "removed": True, "column": h}
+            return {"success": True, "removed": False}
+        except Exception as e:
+            print(f"[mentor_sheet_sync] remove_regn_num_column failed: {e}")
+            return {"success": False, "error": str(e)}
+
+
 def sync_assignment_to_sheet(problem_name, problem_url, due_date, students, get_db=None):
     """
     students: list of dicts, each with reg_no, full_name, completed (bool).
@@ -425,7 +452,7 @@ def resync_all(get_db):
                     if key and key not in row_index:
                         new_row_num = ws.row_count if ws.row_count else DATA_START_ROW
                         ws.append_row(
-                            ["", s["reg_no"] or "", s["full_name"] or s["username"], s["branch"] or ""],
+                            [s["reg_no"] or "", s["full_name"] or s["username"], s["branch"] or ""],
                             table_range=f"A{DATA_START_ROW}",
                         )
                         summary["rows_added"] += 1
