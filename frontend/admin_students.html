@@ -13,11 +13,25 @@
   .table-wrap{overflow-x:auto}
   table{width:100%;border-collapse:collapse}
   th,td{padding:.5rem .6rem;border-bottom:1px solid var(--border2);text-align:left;vertical-align:middle}
-  th{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
-  td input{width:100%;background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:.4rem .55rem;border-radius:8px;font-size:.85rem;font-family:inherit}
+  th{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;cursor:pointer;user-select:none}
+  th.sortable:hover{color:var(--text)}
+  th .sort-arrow{opacity:.5;font-size:.7rem;margin-left:.15rem}
+  td input,td select{width:100%;background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:.4rem .55rem;border-radius:8px;font-size:.85rem;font-family:inherit}
+  td input.dirty{border-color:#fbbf24}
   tr.missing{background:rgba(251,191,36,.05)}
-  .badge{display:inline-flex;padding:.15rem .5rem;border-radius:999px;font-size:.72rem;background:rgba(251,191,36,.15);color:#fbbf24}
-  .banner{margin-bottom:1rem}
+  tr.anomaly{background:rgba(248,113,113,.06)}
+  .badge{display:inline-flex;align-items:center;gap:.25rem;padding:.15rem .5rem;border-radius:999px;font-size:.68rem;font-weight:600}
+  .badge-missing{background:rgba(251,191,36,.15);color:#fbbf24}
+  .badge-anomaly{background:rgba(248,113,113,.15);color:#f87171}
+  .badge-dup{background:rgba(248,113,113,.2);color:#f87171}
+  .toolbar{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-bottom:.9rem}
+  .toolbar .search-bar{margin:0;width:240px}
+  .toolbar select{background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:.5rem .7rem;border-radius:8px;font-size:.82rem;font-family:inherit}
+  .toolbar .spacer{flex:1}
+  .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1rem;margin-bottom:1rem}
+  .actions-cell{display:flex;gap:.4rem}
+  .actions-cell .btn-sm{white-space:nowrap}
+  .row-num{color:var(--muted);font-family:var(--mono);font-size:.78rem}
 </style>
 </head>
 <body>
@@ -31,58 +45,237 @@
 <script src="assets/js/main.js"></script>
 <script src="assets/js/app.js"></script>
 <script>
+let STUDENTS = [];
+let sPage = 1, sSearch = "", sBranch = "all", sFilter = "all";
+let sSortKey = "username", sSortDir = 1;
+const S_PER_PAGE = 15;
+
+// A student's reg_no is treated as an "anomaly" if it doesn't match the
+// shape most other students' reg_nos have (catches things like a phone
+// number accidentally typed into the Reg No field — e.g. a 10-digit
+// number instead of a real register number). We infer the expected
+// length from whatever the majority of filled-in reg_nos already look
+// like, rather than hardcoding a format, since every college's reg_no
+// scheme is different.
+function expectedRegNoLength(users) {
+  const lens = {};
+  users.forEach(u => {
+    const v = (u.reg_no || "").trim();
+    if (v) lens[v.length] = (lens[v.length] || 0) + 1;
+  });
+  let best = null, bestCount = 0;
+  for (const [len, count] of Object.entries(lens)) {
+    if (count > bestCount) { best = Number(len); bestCount = count; }
+  }
+  return best;
+}
+
+function isAnomalousRegNo(regNo, expectedLen) {
+  if (!regNo) return false;
+  if (!expectedLen) return false;
+  return regNo.trim().length !== expectedLen && /^\d+$/.test(regNo.trim());
+}
+
+function computeFlags() {
+  const expectedLen = expectedRegNoLength(STUDENTS);
+  const regCounts = {};
+  STUDENTS.forEach(u => {
+    const v = (u.reg_no || "").trim();
+    if (v) regCounts[v] = (regCounts[v] || 0) + 1;
+  });
+  STUDENTS.forEach(u => {
+    u._missing = !u.reg_no;
+    u._anomaly = isAnomalousRegNo(u.reg_no, expectedLen);
+    u._dup = u.reg_no && regCounts[u.reg_no.trim()] > 1;
+  });
+}
+
+function branchList() {
+  const set = new Set(STUDENTS.map(u => (u.branch || "").trim()).filter(Boolean));
+  return Array.from(set).sort();
+}
+
+function filterSortStudents() {
+  let rows = STUDENTS.slice();
+  if (sSearch) {
+    const q = sSearch.toLowerCase();
+    rows = rows.filter(u =>
+      (u.username || "").toLowerCase().includes(q) ||
+      (u.full_name || "").toLowerCase().includes(q) ||
+      (u.reg_no || "").toLowerCase().includes(q) ||
+      (u.branch || "").toLowerCase().includes(q)
+    );
+  }
+  if (sBranch !== "all") rows = rows.filter(u => (u.branch || "") === sBranch);
+  if (sFilter === "missing") rows = rows.filter(u => u._missing);
+  if (sFilter === "anomaly") rows = rows.filter(u => u._anomaly || u._dup);
+
+  rows.sort((a, b) => {
+    const av = (a[sSortKey] || "").toString().toLowerCase();
+    const bv = (b[sSortKey] || "").toString().toLowerCase();
+    if (av < bv) return -1 * sSortDir;
+    if (av > bv) return 1 * sSortDir;
+    return 0;
+  });
+  return rows;
+}
+
+function sortBy(key) {
+  if (sSortKey === key) sSortDir *= -1; else { sSortKey = key; sSortDir = 1; }
+  sPage = 1;
+  renderTable();
+}
+
+function goStudentsPage(p) { sPage = p; renderTable(); }
+
+function onSearchInput(v) { sSearch = v; sPage = 1; renderTable(); }
+function onBranchChange(v) { sBranch = v; sPage = 1; renderTable(); }
+function onFilterChange(v) { sFilter = v; sPage = 1; renderTable(); }
+
+function markDirty(uid) {
+  const row = document.getElementById(`row-${uid}`);
+  row.querySelectorAll("input").forEach(i => i.classList.add("dirty"));
+  row.querySelector(".save-btn").disabled = false;
+}
+
 async function saveStudent(uid) {
   const row = document.getElementById(`row-${uid}`);
   const data = {
-    full_name: row.querySelector('[name="full_name"]').value,
-    reg_no: row.querySelector('[name="reg_no"]').value,
-    roll_no: row.querySelector('[name="roll_no"]').value,
-    branch: row.querySelector('[name="branch"]').value,
+    full_name: row.querySelector('[name="full_name"]').value.trim(),
+    reg_no: row.querySelector('[name="reg_no"]').value.trim(),
+    roll_no: row.querySelector('[name="roll_no"]').value.trim(),
+    branch: row.querySelector('[name="branch"]').value.trim(),
   };
+  const btn = row.querySelector(".save-btn");
+  btn.disabled = true;
+  btn.textContent = "Saving…";
   const d = await apiPostForm(`/admin/students/update/${uid}`, data);
   showToast(d.message || (d.success ? "Saved!" : "Failed"), d.success ? "success" : "error");
-  if (d.success) location.reload();
+  if (d.success) {
+    const u = STUDENTS.find(x => x.id === uid);
+    Object.assign(u, data);
+    computeFlags();
+    renderTable();               // re-render in place — no page reload
+  } else {
+    btn.disabled = false;
+    btn.textContent = "Save";
+  }
+}
+
+function renderStats() {
+  const total = STUDENTS.length;
+  const missing = STUDENTS.filter(u => u._missing).length;
+  const anomalies = STUDENTS.filter(u => u._anomaly || u._dup).length;
+  const branches = branchList().length;
+  document.getElementById("studentStats").innerHTML = `
+    <div class="stat-card"><div class="stat-icon">🎓</div><div><div class="stat-num">${total}</div><div class="stat-label">Total Students</div></div></div>
+    <div class="stat-card"><div class="stat-icon">⚠️</div><div><div class="stat-num">${missing}</div><div class="stat-label">Missing Reg No</div></div></div>
+    <div class="stat-card"><div class="stat-icon">🚩</div><div><div class="stat-num">${anomalies}</div><div class="stat-label">Anomalies / Duplicates</div></div></div>
+    <div class="stat-card"><div class="stat-icon">🏷️</div><div><div class="stat-num">${branches}</div><div class="stat-label">Branches</div></div></div>
+  `;
+}
+
+function sortArrow(key) {
+  if (sSortKey !== key) return "";
+  return `<span class="sort-arrow">${sSortDir === 1 ? "▲" : "▼"}</span>`;
+}
+
+function renderTable() {
+  const rows = filterSortStudents();
+  const { items, page, total_pages } = paginateArray(rows, sPage, S_PER_PAGE);
+
+  document.getElementById("studentsBranchFilter").innerHTML =
+    `<option value="all">All branches</option>` +
+    branchList().map(b => `<option value="${b}" ${b === sBranch ? "selected" : ""}>${b}</option>`).join("");
+
+  document.getElementById("studentsTableBody").innerHTML = items.length ? items.map((u, i) => `
+    <tr class="${u._missing ? "missing" : ""} ${(u._anomaly || u._dup) ? "anomaly" : ""}" id="row-${u.id}">
+      <td class="row-num">${(page - 1) * S_PER_PAGE + i + 1}</td>
+      <td>
+        ${u.username}
+        ${u._missing ? `<span class="badge badge-missing" title="No register number on file">missing</span>` : ""}
+        ${u._anomaly ? `<span class="badge badge-anomaly" title="This reg no's length doesn't match the rest of the class — check it isn't a phone number or typo">⚠ check</span>` : ""}
+        ${u._dup ? `<span class="badge badge-dup" title="Another student has the same reg no">dup</span>` : ""}
+      </td>
+      <td><input type="text" name="full_name" value="${u.full_name || ""}" maxlength="120" placeholder="Full name" oninput="markDirty(${u.id})"></td>
+      <td><input type="text" name="reg_no" value="${u.reg_no || ""}" maxlength="40" placeholder="Reg No" oninput="markDirty(${u.id})"></td>
+      <td><input type="text" name="roll_no" value="${u.roll_no || ""}" maxlength="40" placeholder="Roll No" oninput="markDirty(${u.id})"></td>
+      <td><input type="text" name="branch" value="${u.branch || ""}" maxlength="40" placeholder="Branch" oninput="markDirty(${u.id})"></td>
+      <td class="actions-cell"><button type="button" class="btn btn-outline btn-sm save-btn" disabled onclick="saveStudent(${u.id})">Save</button></td>
+    </tr>`).join("") : `<tr><td colspan="7" class="empty-state" style="text-align:center;padding:2rem">No students match this filter.</td></tr>`;
+
+  document.getElementById("studentsPagination").innerHTML = paginationHTML(page, total_pages, "goStudentsPage");
+  document.getElementById("studentsCount").textContent = `${rows.length} of ${STUDENTS.length} student(s)`;
 }
 
 (async () => {
   const me = await requireAuth({ admin: true });
   if (!me) return;
 
-  const { users, missing_count } = await apiGet("/admin/students");
+  const { users } = await apiGet("/admin/students");
+  STUDENTS = users || [];
+  computeFlags();
+
+  const missingCount = STUDENTS.filter(u => u._missing).length;
+  const anomalyCount = STUDENTS.filter(u => u._anomaly || u._dup).length;
 
   document.getElementById("app").innerHTML = `
   <div class="page-header">
     <div>
       <h2>🧾 Student Management</h2>
-      <p class="page-sub">Backfill Reg No / Roll No / Branch for existing students — required before the Student_Contest sheet can list them properly.</p>
+      <p class="page-sub">Search, filter and fix Reg No / Roll No / Branch for every student — flags missing or suspicious entries automatically.</p>
     </div>
     <a href="contest_dashboard.html" class="btn btn-outline">← Student Contest</a>
   </div>
 
-  ${missing_count ? `
+  <div class="stats-grid" id="studentStats"></div>
+
+  ${missingCount ? `
   <div class="info-banner banner">
     <span>⚠</span>
-    <span>${missing_count} student(s) still missing a Reg No. They'll be skipped when the Student_Contest sheet is generated until filled in.</span>
+    <span>${missingCount} student(s) still missing a Reg No — they'll be skipped when sheets/exports are generated until filled in.</span>
+  </div>` : ""}
+  ${anomalyCount ? `
+  <div class="info-banner banner" style="background:rgba(248,113,113,.07);border-color:rgba(248,113,113,.18);color:#f87171">
+    <span>🚩</span>
+    <span>${anomalyCount} student(s) have a Reg No that looks off (wrong length for your class, or shared with another student) — worth a quick check.</span>
   </div>` : ""}
 
   <div class="section-card">
+    <div class="toolbar">
+      <div class="search-bar">
+        <span class="search-icon">🔍</span>
+        <input type="text" placeholder="Search name / reg no / branch…" oninput="onSearchInput(this.value)">
+      </div>
+      <select id="studentsBranchFilter" onchange="onBranchChange(this.value)"></select>
+      <select onchange="onFilterChange(this.value)">
+        <option value="all">All students</option>
+        <option value="missing">Missing Reg No</option>
+        <option value="anomaly">Anomalies / Duplicates</option>
+      </select>
+      <div class="spacer"></div>
+      <span class="muted small" id="studentsCount"></span>
+    </div>
+
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Username</th><th>Full Name</th><th>Reg No</th><th>Roll No</th><th>Branch</th><th></th></tr></thead>
-        <tbody>
-          ${(users || []).map(u => `
-            <tr class="${!u.reg_no ? "missing" : ""}" id="row-${u.id}">
-              <td>${u.username} ${!u.reg_no ? `<span class="badge">missing</span>` : ""}</td>
-              <td><input type="text" name="full_name" value="${u.full_name || ""}" maxlength="120" placeholder="Full name"></td>
-              <td><input type="text" name="reg_no" value="${u.reg_no || ""}" maxlength="40" placeholder="Reg No"></td>
-              <td><input type="text" name="roll_no" value="${u.roll_no || ""}" maxlength="40" placeholder="Roll No"></td>
-              <td><input type="text" name="branch" value="${u.branch || ""}" maxlength="40" placeholder="Branch"></td>
-              <td><button type="button" class="btn btn-outline btn-sm" onclick="saveStudent(${u.id})">Save</button></td>
-            </tr>`).join("")}
-        </tbody>
+        <thead><tr>
+          <th>#</th>
+          <th class="sortable" onclick="sortBy('username')">Username ${sortArrow("username")}</th>
+          <th class="sortable" onclick="sortBy('full_name')">Full Name ${sortArrow("full_name")}</th>
+          <th class="sortable" onclick="sortBy('reg_no')">Reg No ${sortArrow("reg_no")}</th>
+          <th class="sortable" onclick="sortBy('roll_no')">Roll No ${sortArrow("roll_no")}</th>
+          <th class="sortable" onclick="sortBy('branch')">Branch ${sortArrow("branch")}</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="studentsTableBody"></tbody>
       </table>
     </div>
+    <div id="studentsPagination"></div>
   </div>`;
+
+  renderStats();
+  renderTable();
 })();
 </script>
 </body>
