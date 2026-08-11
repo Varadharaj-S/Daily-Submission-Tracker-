@@ -26,6 +26,12 @@
 .star-rating { display: flex; gap: .2rem; cursor: pointer; }
 .star-rating span { font-size: 1.1rem; opacity: .35; transition: opacity .15s; }
 .star-rating span.active { opacity: 1; }
+.search-form { display: flex; gap: .5rem; flex-wrap: wrap; align-items: flex-end; margin-bottom: .75rem; }
+.search-form .form-group { flex: 1; min-width: 180px; margin-bottom: 0; }
+.search-summary { font-size: .8rem; color: var(--muted); margin-bottom: .6rem; }
+.search-summary b { color: var(--text); }
+.solved-yes { color: #34d399; font-weight: 700; }
+.solved-no { color: #f87171; font-weight: 700; }
 </style>
 {% endblock %}
 {% block content %}
@@ -176,6 +182,34 @@
 
 <div class="table-card" style="margin-top:1rem">
   <div class="card-header">
+    <h3>🔍 Search Problem — Who's Solved It</h3>
+    <button type="button" class="btn btn-outline" id="syncSheetBtn" onclick="syncSheet()">🔄 Sync Sheet</button>
+  </div>
+  <div style="padding:1rem 1.25rem 0">
+    <p class="section-desc">Check every student in the database against one problem (by name or link), and mirror the result into the roster Google Sheet as a column.</p>
+    <div class="search-form">
+      <div class="form-group">
+        <label class="form-label">Problem Name</label>
+        <input class="form-input" type="text" id="s_name" placeholder="e.g. Two Sum" maxlength="200">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Problem URL</label>
+        <input class="form-input mono" type="url" id="s_url" placeholder="https://leetcode.com/problems/..." maxlength="300">
+      </div>
+      <button type="button" class="btn btn-primary" id="searchBtn" onclick="searchProblem()">Search</button>
+    </div>
+    <div id="searchStatus" class="search-summary" style="display:none"></div>
+    <div class="table-wrap" id="searchResultsWrap" style="display:none">
+      <table>
+        <thead><tr><th>Student</th><th>Reg No</th><th>Solved</th></tr></thead>
+        <tbody id="searchResultsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="table-card" style="margin-top:1rem">
+  <div class="card-header">
     <h3>📋 All Assignments</h3>
     <span class="count-pill">{{ assignments|length }}</span>
   </div>
@@ -248,6 +282,73 @@ function toggleFeedback(id) {
 function setRating(id, val) {
   document.getElementById('rating-' + id).value = val;
   document.querySelectorAll('#stars-' + id + ' span').forEach((s,i) => s.classList.toggle('active', i < val));
+}
+
+// ── Search Problem — checks every student's real submissions, mirrors into the sheet ──
+async function searchProblem() {
+  const name = document.getElementById('s_name').value.trim();
+  const url  = document.getElementById('s_url').value.trim();
+  const statusEl = document.getElementById('searchStatus');
+  const wrap = document.getElementById('searchResultsWrap');
+  const body = document.getElementById('searchResultsBody');
+  const btn  = document.getElementById('searchBtn');
+
+  if (!name && !url) {
+    statusEl.style.display = '';
+    statusEl.textContent = 'Enter a problem name or URL to search.';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Searching...';
+  statusEl.style.display = '';
+  statusEl.textContent = 'Checking every student\'s submissions...';
+  wrap.style.display = 'none';
+
+  try {
+    const params = new URLSearchParams({ problem_name: name, problem_url: url });
+    const res = await fetch(`{{ url_for('mentor_search_problem') }}?${params.toString()}`);
+    const data = await res.json();
+
+    if (!data.success) {
+      statusEl.textContent = data.message || 'Search failed.';
+      return;
+    }
+
+    body.innerHTML = data.results.map(r => `
+      <tr>
+        <td class="mono">${r.full_name || r.username}</td>
+        <td class="mono">${r.reg_no || '—'}</td>
+        <td class="${r.solved ? 'solved-yes' : 'solved-no'}">${r.solved ? '✅ Solved' : '❌ Not Solved'}</td>
+      </tr>
+    `).join('') || '<tr><td colspan="3" class="empty-state" style="text-align:center;padding:1rem">No students found.</td></tr>';
+
+    statusEl.innerHTML = `<b>${data.solved_count}</b> of <b>${data.total}</b> student(s) have solved this problem. Synced to the roster sheet.`;
+    wrap.style.display = '';
+  } catch (e) {
+    statusEl.textContent = 'Search failed — network or server error.';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Search';
+  }
+}
+
+// ── Sync Sheet — re-checks all pending assignments + resyncs the whole roster tab ──
+async function syncSheet() {
+  const btn = document.getElementById('syncSheetBtn');
+  btn.disabled = true;
+  btn.textContent = 'Syncing...';
+  try {
+    const res = await fetch("{{ url_for('mentor_refresh_status') }}", { method: 'POST' });
+    const data = await res.json();
+    alert(data.message || (data.success ? 'Synced.' : 'Sync failed.'));
+    if (data.success) location.reload();
+  } catch (e) {
+    alert('Sync failed — network or server error.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔄 Sync Sheet';
+  }
 }
 </script>
 {% endblock %}

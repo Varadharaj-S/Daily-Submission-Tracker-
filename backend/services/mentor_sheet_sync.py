@@ -84,16 +84,53 @@ def _client():
     return gspread.authorize(creds)
 
 
-def _get_roster_ws():
-    """Open the shared spreadsheet and return the roster worksheet, or
-    None if the configured tab doesn't exist (caller should no-op, not
-    crash the assign flow over a Sheets problem)."""
+ROSTER_BASE_HEADERS = ["Regn Num", "Reg No", "Name", "Branch"]  # no summary "Solved" column — each problem column carries its own status
+
+
+def _import_students_into_new_roster(ws, get_db):
+    """Fills the freshly-created roster tab with one row per active,
+    non-admin student (Reg No / Name / Branch), same 'first fill details'
+    step contest_sheet.py's import_students() does for the contest tab.
+    Returns the number of rows written."""
+    if get_db is None:
+        return 0
+    with get_db() as db:
+        students = db.execute(
+            "SELECT reg_no, full_name, branch FROM users "
+            "WHERE status='active' AND is_admin=0 ORDER BY full_name ASC"
+        ).fetchall()
+    rows = [["", s["reg_no"] or "", s["full_name"] or "", s["branch"] or ""] for s in students]
+    if rows:
+        ws.update(f"A{DATA_START_ROW}", rows, value_input_option="USER_ENTERED")
+    return len(rows)
+
+
+def get_or_create_roster_ws(get_db=None):
+    """Open the shared spreadsheet and return the roster worksheet,
+    creating it (as a new tab in the SAME spreadsheet, matching how
+    contest_sheet.py's get_or_create_student_contest_sheet() works) the
+    first time a problem is ever assigned. On creation: writes the header
+    row at HEADER_ROW and immediately fills in every active student's Reg
+    No / Name / Branch — details go in first, problem columns get added
+    on top of that by _find_or_create_problem_column(), same additive-only
+    pattern as the contest tab's per-contest columns."""
     gc = _client()
     ss = gc.open_by_key(SHEET_ID)
     try:
         return ss.worksheet(MENTOR_SHEET_TAB)
     except gspread.exceptions.WorksheetNotFound:
-        return None
+        ws = ss.add_worksheet(title=MENTOR_SHEET_TAB, rows="2000", cols="20")
+        if HEADER_ROW > 1:
+            ws.update_cell(1, 1, "Mentor Assigned Problems")  # banner row, mirrors the manual sheet's layout
+        ws.update(f"A{HEADER_ROW}", [ROSTER_BASE_HEADERS], value_input_option="USER_ENTERED")
+        _import_students_into_new_roster(ws, get_db)
+        return ws
+
+
+def _get_roster_ws(get_db=None):
+    """Back-compat wrapper — now always gets-or-creates instead of
+    returning None, so a missing tab no longer silently skips the sync."""
+    return get_or_create_roster_ws(get_db)
 
 
 def _col_letter(col_idx):
@@ -145,12 +182,101 @@ def _norm_problem_key(problem_name, problem_url):
     return re.sub(r"[^a-z0-9]+", "", base)
 
 
+def _strip_due_suffix(text):
+    """Header text is written as 'Problem Name (Due 2026-08-15)' when a
+    due date is set, and just 'Problem Name' when it isn't (e.g. from a
+    plain Search). Strip that suffix before using the text as an identity
+    key, or the same problem assigned with vs. without a due date reads
+    as two different problems."""
+    return re.sub(r"\s*\(Due[^)]*\)\s*$", "", text or "").strip()
+
+
+def _header_row_formulas(ws):
+    """Row HEADER_ROW's raw cell formulas (not the rendered display
+    text), so a HYPERLINK(...) column's real underlying URL can be
+    recovered for matching — row_values()/get_all_values() only ever
+    return the rendered link text, never the URL itself."""
+    try:
+        rows = ws.get(f"{HEADER_ROW}:{HEADER_ROW}", value_render_option="FORMULA")
+        return rows[0] if rows else []
+    except Exception:
+        return []
+
+
+def _header_col_key(formula_text, display_text):
+    """Canonical identity key for one existing header cell. Prefers the
+    HYPERLINK formula's real URL (so the same problem always matches the
+    same column no matter what due-date text sits next to it); falls
+    back to the display text with any '(Due ...)' suffix stripped."""
+    m = re.match(r'=HYPERLINK\("([^"]+)"', formula_text or "")
+    if m:
+        return _norm_problem_key("", m.group(1))
+    return _norm_problem_key(_strip_due_suffix(display_text), "")
+
+
+def repair_duplicate_problem_columns(ws):
+    """Cleanup for the matching bug above: because _find_or_create_problem_column
+    used to compare the target key (URL-preferring) against the header's
+    raw display text (name + due-date suffix), the SAME problem could get
+    a fresh column every time it was assigned with a different due date,
+    or once via URL and once via name-only search. This merges every
+    group of header columns that share a canonical key (via
+    _header_col_key) back into one — the leftmost column is kept, 'Solved'
+    wins over 'Not Solved'/blank across the group when merging each row —
+    and the extra columns are deleted. Returns the number of columns
+    removed. Safe to call every sync; a no-op once nothing is duplicated."""
+    header = _header_row_values(ws)
+    start = len(ROSTER_BASE_HEADERS)  # 0-based index where problem columns begin
+    if len(header) <= start:
+        return 0
+
+    formulas = _header_row_formulas(ws)
+    groups = {}
+    for i in range(start + 1, len(header) + 1):  # 1-based column index
+        h = header[i - 1]
+        f = formulas[i - 1] if i - 1 < len(formulas) else ""
+        key = _header_col_key(f, h)
+        if key:
+            groups.setdefault(key, []).append(i)
+
+    dup_groups = {k: cols for k, cols in groups.items() if len(cols) > 1}
+    if not dup_groups:
+        return 0
+
+    all_values = ws.get_all_values()
+    data_rows = all_values[DATA_START_ROW - 1:]
+
+    cols_to_delete = []
+    for cols in dup_groups.values():
+        primary = min(cols)
+        merged = []
+        for row in data_rows:
+            vals = [(row[c - 1].strip() if c - 1 < len(row) else "") for c in cols]
+            if STATUS_SOLVED in vals:
+                merged.append(STATUS_SOLVED)
+            else:
+                primary_val = row[primary - 1].strip() if primary - 1 < len(row) else ""
+                merged.append(primary_val or STATUS_NOT_SOLVED)
+        if merged:
+            col_letter = _col_letter(primary)
+            ws.update(f"{col_letter}{DATA_START_ROW}:{col_letter}{DATA_START_ROW + len(merged) - 1}",
+                      [[v] for v in merged], value_input_option="USER_ENTERED")
+        cols_to_delete.extend(c for c in cols if c != primary)
+
+    for c in sorted(set(cols_to_delete), reverse=True):  # rightmost first — keeps earlier indices valid
+        ws.delete_columns(c)
+
+    return len(cols_to_delete)
+
+
 def _find_or_create_problem_column(ws, problem_name, problem_url, due_date=None):
     headers = _header_row_values(ws)
+    formulas = _header_row_formulas(ws)
     target_key = _norm_problem_key(problem_name, problem_url)
 
     for i, h in enumerate(headers, start=1):
-        if _norm_problem_key(h, "") == target_key and target_key:
+        f = formulas[i - 1] if i - 1 < len(formulas) else ""
+        if target_key and _header_col_key(f, h) == target_key:
             return i
 
     # No existing column — append a new one right after the last used column.
@@ -230,19 +356,22 @@ def _apply_conditional_colors(ws, col_idx):
     ws.spreadsheet.batch_update(requests_body)
 
 
-def sync_assignment_to_sheet(problem_name, problem_url, due_date, students):
+def sync_assignment_to_sheet(problem_name, problem_url, due_date, students, get_db=None):
     """
     students: list of dicts, each with reg_no, full_name, completed (bool).
+    get_db: optional — passed through so a first-ever assignment can
+    create the roster tab and immediately fill it with every student's
+    details (see get_or_create_roster_ws()). If omitted and the tab
+    doesn't exist yet, it's still created, just left to fill in via the
+    next resync_all() instead.
     Best-effort: swallow Sheets errors so a Sheets outage never breaks the
     assign flow itself (the DB write already succeeded by the time this
     runs — this is a mirror, not the source of truth).
     """
     with _lock:
         try:
-            ws = _get_roster_ws()
-            if ws is None:
-                print(f"[mentor_sheet_sync] tab '{MENTOR_SHEET_TAB}' not found — skipped sheet sync.")
-                return False
+            ws = get_or_create_roster_ws(get_db)
+            repair_duplicate_problem_columns(ws)
 
             headers = _header_row_values(ws)
             row_index, key_col, mode = _build_row_index(ws, headers)
@@ -279,10 +408,8 @@ def resync_all(get_db):
     with _lock:
         summary = {"columns_touched": 0, "cells_updated": 0, "rows_added": 0, "skipped": False}
         try:
-            ws = _get_roster_ws()
-            if ws is None:
-                summary["skipped"] = True
-                return summary
+            ws = get_or_create_roster_ws(get_db)
+            summary["duplicate_columns_merged"] = repair_duplicate_problem_columns(ws)
 
             headers = _header_row_values(ws)
             row_index, key_col, mode = _build_row_index(ws, headers)

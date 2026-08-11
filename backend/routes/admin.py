@@ -6,6 +6,7 @@ into workers/backup_worker.py (same pg_dump/psql commands, extracted once
 instead of duplicated across the two routes).
 """
 
+import re
 import time
 from datetime import datetime
 
@@ -157,11 +158,41 @@ def admin_promote(uid):
 
 # ── Mentor Mode ───────────────────────────────────────────────────────────────
 
+def _extract_leetcode_slug(url):
+    """Pulls the slug ('two-sum') out of a LeetCode problem URL,
+    regardless of trailing slash, http vs https, or a query string."""
+    if not url:
+        return None
+    m = re.search(r"leetcode\.com/problems/([a-zA-Z0-9\-]+)", url)
+    return m.group(1).lower() if m else None
+
+
+def _normalize_problem_name(name):
+    """Strips a leading list-numbering prefix ('1. ', '12) ', etc.) and
+    collapses whitespace. Admins commonly paste a problem name straight
+    out of a numbered list (e.g. '1. Two Sum'); the synced submission's
+    stored title never has that prefix ('Two Sum'), so an exact
+    case-insensitive compare misses every single match."""
+    if not name:
+        return ""
+    name = re.sub(r"^\s*\d+[\.\)]\s*", "", name.strip())
+    return re.sub(r"\s+", " ", name).strip().lower()
+
+
 def _is_solved_by_student(db, user_id, problem_url, problem_name):
     """
     Check whether a student has already solved the given problem using the
-    existing submissions table.  We match on URL first (most reliable), then
-    fall back to a case-insensitive name match.
+    existing submissions table. Tries, in order of reliability:
+      1. Exact problem_url match.
+      2. The LeetCode slug extracted from the URL, against
+         submissions.problem_id — catches trailing-slash / http-vs-https
+         / query-string differences between what an admin pastes and what
+         sync actually stored (submissions.problem_url is always written
+         as 'https://leetcode.com/problems/{slug}/' by lc_service.py).
+      3. An exact case-insensitive name match.
+      4. A numbering-stripped name match ('1. Two Sum' -> 'two sum'),
+         since submissions.problem_name is always the clean title with no
+         leading number.
     """
     if problem_url and problem_url.strip():
         row = db.execute(
@@ -170,6 +201,16 @@ def _is_solved_by_student(db, user_id, problem_url, problem_name):
         ).fetchone()
         if row:
             return True
+
+        slug = _extract_leetcode_slug(problem_url)
+        if slug:
+            row = db.execute(
+                "SELECT id FROM submissions WHERE user_id=%s AND LOWER(problem_id)=%s LIMIT 1",
+                (user_id, slug)
+            ).fetchone()
+            if row:
+                return True
+
     if problem_name and problem_name.strip():
         row = db.execute(
             "SELECT id FROM submissions WHERE user_id=%s AND LOWER(problem_name)=LOWER(%s) LIMIT 1",
@@ -177,6 +218,15 @@ def _is_solved_by_student(db, user_id, problem_url, problem_name):
         ).fetchone()
         if row:
             return True
+
+        norm_target = _normalize_problem_name(problem_name)
+        if norm_target:
+            rows = db.execute(
+                "SELECT problem_name FROM submissions WHERE user_id=%s", (user_id,)
+            ).fetchall()
+            for r in rows:
+                if _normalize_problem_name(r["problem_name"]) == norm_target:
+                    return True
     return False
 
 
@@ -256,7 +306,7 @@ def mentor():
                         })
                 db.commit()
                 if sheet_rows:
-                    run_background(sync_assignment_to_sheet, pname, purl, due, sheet_rows)
+                    run_background(sync_assignment_to_sheet, pname, purl, due, sheet_rows, get_db)
                 msg = f"Assigned to {created} student(s)."
                 if dupes:   msg += f" {dupes} already assigned (skipped)."
                 if solved:  msg += f" {solved} already solved (marked Completed)."
@@ -286,7 +336,7 @@ def mentor():
                 run_background(sync_assignment_to_sheet, pname, purl, due, [{
                     "reg_no": student["reg_no"], "full_name": student["full_name"],
                     "completed": result == "already_solved"
-                }])
+                }], get_db)
 
                 if result == "already_solved":
                     return jsonify({"success": True, "message": "Problem assigned and marked Completed (student already solved it)."})
@@ -384,6 +434,8 @@ def mentor_refresh_status():
         msg += (f" Sheet: {sheet_summary['columns_touched']} column(s), "
                 f"{sheet_summary['cells_updated']} cell(s), "
                 f"{sheet_summary['rows_added']} new student row(s) synced.")
+        if sheet_summary.get("duplicate_columns_merged"):
+            msg += f" {sheet_summary['duplicate_columns_merged']} duplicate column(s) merged."
     return jsonify({"success": True, "updated": updated, "sheet_sync": sheet_summary,
                     "message": msg})
 
@@ -466,7 +518,7 @@ def mentor_search_problem():
     # searched problem shows up as a column there the same way an assigned
     # one does — this doesn't touch mentor_assignments, it's read-only from
     # the DB's point of view, just a sheet mirror of what was searched.
-    run_background(sync_assignment_to_sheet, pname, purl, "", sheet_rows)
+    run_background(sync_assignment_to_sheet, pname, purl, "", sheet_rows, get_db)
 
     return jsonify({
         "success": True,
