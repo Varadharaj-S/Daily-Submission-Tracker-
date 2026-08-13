@@ -78,3 +78,22 @@ class Config:
 
     # In-process per-user daily auto-sync loop (services/scheduler_service.py).
     AUTO_SYNC_INTERVAL_HOURS = int(os.environ.get("AUTO_SYNC_INTERVAL_HOURS", "24"))
+
+    # ── /import_lc 504 fix (Vercel → Render handoff) ───────────────────────
+    # On Vercel, routes/sync.py's /import_lc can no longer run the long
+    # LeetCode import in-process (that's what produced the 504s — see that
+    # file). Instead it hands the job off to the persistent Render
+    # deployment of this same app (render.yaml / Procfile), which actually
+    # runs it in a background thread and survives past a single request.
+    #
+    # WORKER_BACKEND_URL: base URL of that persistent deployment, e.g.
+    #   https://dsa-tracker.onrender.com
+    # Only needs to be set in the Vercel environment (the call is a no-op
+    # on Render/local, which already run the import in-process).
+    WORKER_BACKEND_URL = os.environ.get("WORKER_BACKEND_URL", "")
+
+    # INTERNAL_TASK_SECRET: shared secret so the new internal
+    # /internal/run_import_lc route (also in routes/sync.py) only accepts
+    # this server-to-server call, not arbitrary internet requests. Must be
+    # set to the same value on both the Vercel and Render deployments.
+    INTERNAL_TASK_SECRET = os.environ.get("INTERNAL_TASK_SECRET", "")
