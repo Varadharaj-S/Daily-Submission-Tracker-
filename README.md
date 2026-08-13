@@ -63,42 +63,6 @@ There is no common student Google Sheet.
 
 Each student's academic year is stored in the database and is used to determine which Google Sheet they can access.
 
-🏗️ System Architecture
-                    ┌─────────────────────┐
-                    │      Frontend       │
-                    │ HTML / CSS / JS     │
-                    └──────────┬──────────┘
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │   Flask Backend     │
-                    │   Routes / APIs     │
-                    └──────────┬──────────┘
-                               │
-              ┌────────────────┼────────────────┐
-              │                │                │
-              ▼                ▼                ▼
-       ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-       │ PostgreSQL  │  │ Sync Engine │  │  Services   │
-       │  Database   │  │             │  │             │
-       └─────────────┘  └──────┬──────┘  └──────┬──────┘
-                               │                │
-                  ┌────────────┼────────────────┤
-                  │            │                │
-                  ▼            ▼                ▼
-             Codeforces    LeetCode          AtCoder
-                              
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │ Year Sheet Service  │
-                    └──────────┬──────────┘
-                               │
-                 ┌─────────────┴─────────────┐
-                 ▼                           ▼
-          2028 Google Sheet          2029 Google Sheet
-🎓 Year-Wise Architecture
-
 The main architectural feature of the project is year-wise isolation.
 
 Each student has a cohort_year.
