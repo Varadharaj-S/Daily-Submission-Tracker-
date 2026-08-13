@@ -41,33 +41,89 @@
 const platformCls = p => (p || "").toLowerCase().replace("codeforces", "cf").replace("leetcode", "lc").replace("atcoder", "ac");
 let DASH;
 
+/* ── LeetCode Import — fire-and-forget + status polling ────────────────
+   POST /import_lc returns immediately with status "started".
+   We then poll GET /import_lc/status every 8 s until completed/failed.
+   This prevents a Vercel 504: the import runs on the Render backend.
+──────────────────────────────────────────────────────────────────── */
+let _lcImportPollTimer = null;
+
 async function importLeetCode() {
-  const btn = document.getElementById("importLcBtn");
-  const label = document.getElementById("importLcLabel");
+  const btn    = document.getElementById("importLcBtn");
+  const label  = document.getElementById("importLcLabel");
   const spinner = document.getElementById("importLcSpinner");
+  const statusEl = document.getElementById("importLcStatus");
+
   btn.disabled = true;
-  if (label) label.innerText = "Importing...";
+  if (label)   label.innerText = "Starting...";
   if (spinner) spinner.style.display = "inline-block";
+  if (statusEl) { statusEl.style.display = "block"; statusEl.innerText = "⏳ Requesting import…"; }
+
   try {
     const data = await apiPostJSON("/import_lc", {});
-    if (data.success) {
-      if (label) label.innerText = "Import Completed ✅";
-      if (spinner) spinner.style.display = "none";
-      showToast(data.message, "success");
-      setTimeout(() => location.reload(), 3000);
-    } else {
+
+    if (!data.success) {
       btn.disabled = false;
-      if (label) label.innerText = "📥 Import Full LC";
+      if (label)   label.innerText = "📥 Import Full LC";
       if (spinner) spinner.style.display = "none";
+      if (statusEl) statusEl.style.display = "none";
       showToast(data.message || "Import failed", "error");
+      return;
     }
+
+    // Import started on Render backend — tell the user they can keep using the app
+    if (label)   label.innerText = "Importing…";
+    if (statusEl) statusEl.innerText = "⏳ Import running in background. You can continue using the dashboard.";
+    showToast(data.message || "LeetCode import started", "success");
+
+    // Begin polling /import_lc/status every 8 seconds
+    _startImportStatusPoll(btn, label, spinner, statusEl);
+
   } catch (err) {
     console.error(err);
     btn.disabled = false;
-    if (label) label.innerText = "📥 Import Full LC";
+    if (label)   label.innerText = "📥 Import Full LC";
     if (spinner) spinner.style.display = "none";
-    showToast("Import failed. Try again.", "error");
+    if (statusEl) statusEl.style.display = "none";
+    showToast("Import request failed. Try again.", "error");
   }
+}
+
+function _startImportStatusPoll(btn, label, spinner, statusEl) {
+  if (_lcImportPollTimer) clearInterval(_lcImportPollTimer);
+
+  _lcImportPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch((window.BASE_API_URL || "") + "/import_lc/status", {
+        credentials: "include"
+      });
+      const data = await res.json();
+      const st = (data.status || "").toLowerCase();
+
+      if (st === "running") {
+        if (statusEl) statusEl.innerText = "⏳ Import running… (this can take a few minutes)";
+      } else if (st === "completed") {
+        clearInterval(_lcImportPollTimer);
+        _lcImportPollTimer = null;
+        if (label)   label.innerText = "Import Completed ✅";
+        if (spinner) spinner.style.display = "none";
+        if (statusEl) { statusEl.innerText = "✅ Import complete! Reloading…"; }
+        showToast("LeetCode import completed ✅", "success");
+        setTimeout(() => location.reload(), 2500);
+      } else if (st === "failed") {
+        clearInterval(_lcImportPollTimer);
+        _lcImportPollTimer = null;
+        btn.disabled = false;
+        if (label)   label.innerText = "📥 Import Full LC";
+        if (spinner) spinner.style.display = "none";
+        if (statusEl) statusEl.innerText = "❌ Import failed. Check your LeetCode cookie in Settings and try again.";
+        showToast("Import failed — please reconnect your LeetCode account in Settings.", "error");
+      }
+      // queued / unknown → keep polling
+    } catch (e) {
+      console.warn("import_lc status poll error:", e);
+    }
+  }, 8000);
 }
 
 async function sendFeedback() {
@@ -112,7 +168,8 @@ function renderDashboard() {
         <button id="importLcBtn" class="btn btn-import" onclick="importLeetCode()">
           <span id="importLcLabel">📥 Import Full LC</span>
           <span id="importLcSpinner" class="spinner" style="display:none"></span>
-        </button>` : `
+        </button>
+        <div id="importLcStatus" style="display:none;margin-top:.6rem;font-size:.85rem;color:#94a3b8;line-height:1.4;max-width:320px;"></div>` : `
         <div class="feedback-card">
           <h3>⭐ Feedback</h3>
           <textarea id="feedbackText" rows="4" placeholder="Tell us about your experience..." class="form-input"></textarea>

@@ -160,7 +160,8 @@ def init_db():
             created_at        TEXT DEFAULT '',
             lc_imported       INTEGER DEFAULT 0,
             auto_sync_enabled INTEGER DEFAULT 1,
-            sync_time         TEXT DEFAULT '09:00'
+            sync_time         TEXT DEFAULT '09:00',
+            lc_import_status  TEXT DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS submissions (
             id           SERIAL PRIMARY KEY,
@@ -421,6 +422,7 @@ def ensure_db_columns():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS reg_no TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS roll_no TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS branch TEXT DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS lc_import_status TEXT DEFAULT ''",
     ]
     for stmt in stmts:
         try:

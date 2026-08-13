@@ -1,61 +1,119 @@
 """
-routes/cron.py — Vercel Cron entry point for the daily auto-sync job.
-(PART 3 — deployment compatibility only, added file.)
+routes/cron.py — Vercel Cron entry points for daily auto-sync and contest sync.
 
-On Render, the daily sync runs as its own cron service that executes
-`python scheduler.py` directly (see render.yaml). Vercel's platform has no
-equivalent "run this script on a schedule" primitive — Vercel Cron Jobs
-work only by making an HTTP request to a path in the deployed app on a
-schedule (configured in vercel.json). This file exists solely to give
-Vercel Cron something to call. It does not duplicate, change, or
-re-implement any sync logic — it just imports and calls the exact same
-`scheduler.main()` function that `python scheduler.py` runs on Render, so
-the two platforms use the same code path.
+ARCHITECTURE:
+  Render is the authoritative scheduler. render.yaml defines two cron
+  services that call `python scheduler.py` and `python contest_scheduler.py`
+  on a real persistent process — those run fine because Render keeps the
+  process alive.
 
-If CRON_SECRET is set in the environment, Vercel automatically sends it
-as a Bearer token on every cron invocation, and requests without a
-matching secret are rejected so this endpoint can't be used to trigger
-syncs from outside:
-https://vercel.com/docs/cron-jobs/manage-cron-jobs#securing-cron-jobs
-If CRON_SECRET is not set, the endpoint runs unauthenticated (same as
-before this file existed, since there was no such endpoint at all).
+  Vercel Cron Jobs work by making an HTTP GET/POST to a route in the
+  deployed serverless app on a schedule. But that route runs inside a
+  Vercel serverless function, which has a hard timeout (~10 s on Hobby,
+  ~60 s on Pro) — not nearly enough time to sync many students.
+
+  CORRECT BEHAVIOR ON VERCEL:
+  These routes do NOT run the sync inline. Instead they POST to the Render
+  persistent backend's /internal/trigger_import or the daily-sync endpoint,
+  and return immediately.  The actual work runs on Render.
+
+  CORRECT BEHAVIOR ON RENDER (local dev, gunicorn):
+  The route is never called by Vercel cron — Render runs the cron services
+  directly. But if it IS called (manual curl, etc.) it runs inline as before.
+
+Security: CRON_SECRET guards against external callers.
+          INTERNAL_SECRET is used for the Render-side internal endpoints.
 """
 
 import os
+import threading
 
+import requests as _requests
 from flask import request, jsonify
 
 from extensions import app
 
 
-@app.route("/api/cron/daily-sync", methods=["GET", "POST"])
-def cron_daily_sync():
+def _check_cron_secret():
     secret = os.environ.get("CRON_SECRET", "")
     if secret:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header != f"Bearer {secret}":
-            return jsonify({"ok": False, "message": "Unauthorized"}), 401
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {secret}":
+            return False
+    return True
 
+
+def _render_url(path: str) -> str:
+    base = os.environ.get("APP_URL", "http://localhost:5000").rstrip("/")
+    return f"{base}{path}"
+
+
+def _internal_headers() -> dict:
+    return {
+        "X-Internal-Secret": os.environ.get("INTERNAL_SECRET", ""),
+        "Content-Type": "application/json",
+    }
+
+
+@app.route("/api/cron/daily-sync", methods=["GET", "POST"])
+def cron_daily_sync():
+    """
+    Called by Vercel Cron (vercel.json schedule).
+
+    On Vercel:  POSTs to Render /internal/cron/daily-sync → returns fast.
+    On Render:  Runs scheduler.main() inline (Render's own cron calls
+                python scheduler.py directly so this branch is rarely hit).
+    """
+    if not _check_cron_secret():
+        return jsonify({"ok": False, "message": "Unauthorized"}), 401
+
+    if os.environ.get("VERCEL"):
+        # Delegate to Render — don't run the full sync here.
+        target = _render_url("/internal/cron/daily-sync")
+        secret = os.environ.get("INTERNAL_SECRET", "")
+        if not secret:
+            return jsonify({
+                "ok": False,
+                "message": "INTERNAL_SECRET not set — cannot delegate to Render backend."
+            }), 503
+        try:
+            resp = _requests.post(target, headers=_internal_headers(), timeout=10)
+            resp.raise_for_status()
+        except Exception as e:
+            return jsonify({"ok": False, "message": f"Render delegation failed: {e}"}), 503
+        return jsonify({"ok": True, "message": "Daily sync delegated to Render backend"})
+
+    # Render / local: run inline
     from scheduler import main as run_daily_sync
     run_daily_sync()
-
     return jsonify({"ok": True, "message": "Daily sync completed"})
 
 
 @app.route("/api/cron/contest-sync", methods=["GET", "POST"])
 def cron_contest_sync():
-    """vercel.json's crons[] entry for '/api/cron/contest-sync' had no
-    matching route — on Vercel that cron 404'd every tick and no contest
-    was ever auto-synced there. Same pattern as cron_daily_sync() above:
-    just calls the one real implementation (contest_scheduler.main(),
-    which itself calls contest.contest_sync.run_due_contests())."""
-    secret = os.environ.get("CRON_SECRET", "")
-    if secret:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header != f"Bearer {secret}":
-            return jsonify({"ok": False, "message": "Unauthorized"}), 401
+    """
+    Called by Vercel Cron (vercel.json schedule).
+    Same delegation pattern as cron_daily_sync().
+    """
+    if not _check_cron_secret():
+        return jsonify({"ok": False, "message": "Unauthorized"}), 401
 
+    if os.environ.get("VERCEL"):
+        target = _render_url("/internal/cron/contest-sync")
+        secret = os.environ.get("INTERNAL_SECRET", "")
+        if not secret:
+            return jsonify({
+                "ok": False,
+                "message": "INTERNAL_SECRET not set — cannot delegate to Render backend."
+            }), 503
+        try:
+            resp = _requests.post(target, headers=_internal_headers(), timeout=10)
+            resp.raise_for_status()
+        except Exception as e:
+            return jsonify({"ok": False, "message": f"Render delegation failed: {e}"}), 503
+        return jsonify({"ok": True, "message": "Contest sync delegated to Render backend"})
+
+    # Render / local: run inline
     from contest_scheduler import main as run_contest_sync
     run_contest_sync()
-
     return jsonify({"ok": True, "message": "Contest sync completed"})

@@ -14,25 +14,26 @@ from database.db import get_db
 
 def run_background(target, *args, **kwargs):
     """
-    Deployment-compatibility helper (PART 3 / Vercel).
+    Fire-and-forget helper: runs `target` in a daemon thread so the HTTP
+    response is returned immediately.
 
-    Originally, routes fired background work with a bare
-    `threading.Thread(target=..., daemon=True).start()` and returned
-    immediately. That works on Render/local because the process stays
-    alive between requests. On Vercel, a serverless function's process is
-    frozen/torn down right after the HTTP response is sent, so a detached
-    daemon thread is not guaranteed to finish its work.
+    IMPORTANT — Vercel note:
+    The old version of this helper ran `target` SYNCHRONOUSLY when the VERCEL
+    env var was detected, under the assumption that a daemon thread wouldn't
+    finish before the serverless process was frozen. That caused the 504:
+    /import_lc held the Vercel request open for the entire LeetCode import
+    (5–15 minutes) and Vercel killed it after ~10 s.
 
-    This helper preserves the exact original fire-and-forget behavior
-    everywhere except Vercel: when the VERCEL env var is present (set
-    automatically by the platform), the target is run synchronously
-    in-process instead, so it actually completes before the response is
-    returned. No business logic in `target` is changed either way.
+    The correct fix for long-running work on Vercel is to delegate it to the
+    Render persistent backend — NOT to run it synchronously inside the Vercel
+    request. /import_lc now does that delegation in routes/sync.py and never
+    calls run_background at all on Vercel.
+
+    This function is now always a thread. Any caller that needs to do real work
+    on Vercel must use the Render delegation pattern (routes/internal.py)
+    instead of calling run_background.
     """
-    if os.environ.get("VERCEL"):
-        target(*args, **kwargs)
-    else:
-        threading.Thread(target=target, args=args, kwargs=kwargs, daemon=True).start()
+    threading.Thread(target=target, args=args, kwargs=kwargs, daemon=True).start()
 
 
 def rows_to_dicts(rows):

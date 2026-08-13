@@ -82,6 +82,7 @@ from routes import notifications   # noqa: E402,F401  (Phase 3 — currently emp
 from routes import api             # noqa: E402,F401  (Phase 3 — currently empty, see file docstring)
 from routes import cron            # noqa: E402,F401  /api/cron/daily-sync (Vercel Cron entry point, PART 3)
 from routes import session_api     # noqa: E402,F401  /api/auth/me (frontend/backend split, PART 5)
+from routes import internal        # noqa: E402,F401  /internal/* — Render-only endpoints for delegated long-running work
 
 
 # ── Error handlers ────────────────────────────────────────────────────────────

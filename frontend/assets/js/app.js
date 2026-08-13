@@ -141,7 +141,7 @@ function renderNav(me) {
         <a href="settings.html" class="nav-link ${active(["settings.html"])}">Settings</a>
         <a href="#" class="nav-link nav-logout" id="logoutLink">Logout</a>
       </div>
-      <button class="nav-toggle" onclick="document.getElementById('navLinks').classList.toggle('open')">☰</button>
+      <button class="nav-toggle" onclick="const l=document.getElementById('navLinks'); l.classList.toggle('open'); this.textContent = l.classList.contains('open') ? '✕' : '☰';">☰</button>
     </nav>`;
 
   document.getElementById("logoutLink").addEventListener("click", async (e) => {
@@ -151,7 +151,11 @@ function renderNav(me) {
   });
 
   document.querySelectorAll(".nav-link").forEach(l =>
-    l.addEventListener("click", () => document.getElementById("navLinks")?.classList.remove("open"))
+    l.addEventListener("click", () => {
+      document.getElementById("navLinks")?.classList.remove("open");
+      const toggle = document.querySelector(".nav-toggle");
+      if (toggle) toggle.textContent = "☰";
+    })
   );
 }
 
