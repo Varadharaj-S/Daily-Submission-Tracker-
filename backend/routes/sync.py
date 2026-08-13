@@ -92,20 +92,38 @@ def _trigger_remote_import(user_id):
         return False
 
     try:
-        requests.post(
+        response = requests.post(
             f"{backend_url.rstrip('/')}/internal/run_import_lc",
             json={"user_id": user_id},
             headers={"X-Internal-Secret": secret},
-            timeout=3,
+            timeout=10,
         )
+
+        print(
+            "[IMPORT] Worker response:",
+            response.status_code,
+            response.text[:500]
+        )
+
+        if response.status_code != 200:
+            print(
+                "[IMPORT] Worker rejected request:",
+                response.status_code,
+                response.text[:500]
+            )
+            return False
+
+        return True
+
+    except requests.exceptions.RequestException as exc:
+        print("[IMPORT] Worker connection failed:", repr(exc))
+        return False
     except requests.exceptions.RequestException:
         # Expected in the common case: we intentionally don't wait for the
         # import to finish. Render has already received and started the
         # job; a timeout/connection-closed exception here just means this
         # short-lived kickoff call ended, not that the import failed.
         pass
-
-    return True
 
 
 # ── LeetCode Full Import (First Time — uses LEETCODE_SESSION cookie) ─────────
@@ -124,19 +142,17 @@ def import_lc():
             "message": "Connect LeetCode first"
         })
 
-    if os.environ.get("VERCEL"):
-        # Run on the persistent Render backend instead of inside this
-        # serverless request — see _trigger_remote_import().
+    if Config.WORKER_BACKEND_URL and Config.INTERNAL_TASK_SECRET:
+        # Always use the persistent backend when configured.
         started = _trigger_remote_import(current_user.id)
+
         if not started:
             return jsonify({
                 "success": False,
-                "message": "Import worker isn't configured yet. Please contact an admin."
+                "message": "Import worker isn't configured correctly."
             }), 503
     else:
-        # Unchanged: Render/local already run this in a background thread
-        # and return immediately (run_background() only runs synchronously
-        # when VERCEL is set, which it isn't here).
+        # Local / Render fallback
         run_background(_do_import, current_user.id)
 
     return jsonify({
