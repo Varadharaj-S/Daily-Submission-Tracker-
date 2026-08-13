@@ -65,8 +65,16 @@ async function openMySheet() {
   else showToast(data.message || "Could not open sheet.", "error");
 }
 
-async function openMasterSheet() {
-  const data = await apiGet("/admin/master_sheet");
+async function openMasterSheet(year) {
+  // Admin/Mentor "My Sheet" is year-scoped (PHASE 4) — a year must be
+  // explicitly selected (see admin.html's year selector) and gets sent
+  // as ?year=, same trusted-year-selection pattern mentor.html already
+  // uses. Never silently falls back to a student's cohort_year.
+  if (!year) {
+    showToast("Select a year first.", "error");
+    return;
+  }
+  const data = await apiGet(`/admin/master_sheet?year=${encodeURIComponent(year)}`);
   if (data.url) window.open(data.url, "_blank");
   else showToast(data.message || "Could not open master sheet.", "error");
 }

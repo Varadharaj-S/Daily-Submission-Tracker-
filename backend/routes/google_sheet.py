@@ -6,6 +6,8 @@ year-wise architecture: there is no more single shared SHEET_ID, every
 year has its own spreadsheet (services/year_sheet_service.py).
 """
 
+import logging
+
 from flask import jsonify, request
 from flask_login import current_user
 import gspread
@@ -17,6 +19,70 @@ from services.mentor_sheet_sync import MENTOR_SHEET_TAB
 from services.year_sheet_service import (
     get_sheet_id_for_year, get_gspread_client, is_year_configured,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _open_spreadsheet_or_error(sheet_id, year):
+    """Shared open-the-spreadsheet-and-turn-any-failure-into-a-clear-
+    JSON-message logic for both /admin/master_sheet and /my_sheet.
+    Before this, any gspread/auth failure here fell through as an
+    unhandled 500 with no JSON body, so the frontend just showed the
+    generic "Could not open master sheet." fallback with no way to
+    tell what actually went wrong. Returns (spreadsheet, None) on
+    success, or (None, (json_response, status_code)) on failure —
+    callers just `if err: return err`.
+    """
+    if not sheet_id:
+        return None, (jsonify({
+            "success": False,
+            "message": f"No Google Sheet is configured for year '{year}' yet. "
+                       "Add its spreadsheet ID (or paste the sheet's URL) in the "
+                       "mentor dashboard's Year / Cohort Sheets panel."
+        }), 409)
+    try:
+        gc = get_gspread_client()
+    except Exception as e:
+        logger.exception("Failed to build gspread client for year %s", year)
+        return None, (jsonify({
+            "success": False,
+            "message": f"Google Sheets credentials aren't set up correctly on the server "
+                       f"({e.__class__.__name__}). Check GOOGLE_SERVICE_JSON."
+        }), 500)
+    try:
+        spreadsheet = gc.open_by_key(sheet_id)
+    except gspread.exceptions.SpreadsheetNotFound:
+        logger.warning("Google Sheet open failed for year %s: SpreadsheetNotFound (id=%s)", year, sheet_id)
+        return None, (jsonify({
+            "success": False,
+            "message": f"No spreadsheet found for year '{year}' with ID '{sheet_id}'. "
+                       "Double-check the spreadsheet ID/URL saved for this year, and make "
+                       "sure it hasn't been deleted or moved."
+        }), 404)
+    except gspread.exceptions.APIError as e:
+        logger.exception("Google Sheets API error opening spreadsheet for year %s", year)
+        detail = ""
+        try:
+            detail = e.response.json().get("error", {}).get("message", "")
+        except Exception:
+            pass
+        return None, (jsonify({
+            "success": False,
+            "message": (
+                f"Google rejected the request for year '{year}'"
+                + (f": {detail}" if detail else ".")
+                + " This is almost always the service account not having Editor/Viewer "
+                  "access on that spreadsheet — share the sheet with the service "
+                  "account's email and try again."
+            )
+        }), 502)
+    except Exception as e:
+        logger.exception("Unexpected error opening spreadsheet for year %s", year)
+        return None, (jsonify({
+            "success": False,
+            "message": f"Could not open the spreadsheet for year '{year}' ({e.__class__.__name__}: {e})."
+        }), 500)
+    return spreadsheet, None
 
 
 @app.route("/admin/master_sheet")
@@ -37,8 +103,9 @@ def admin_master_sheet():
         return jsonify({"success": False, "message": "Select a valid, configured year first."}), 400
 
     sheet_id = get_sheet_id_for_year(year)
-    gc = get_gspread_client()
-    spreadsheet = gc.open_by_key(sheet_id)
+    spreadsheet, err = _open_spreadsheet_or_error(sheet_id, year)
+    if err:
+        return err
 
     try:
         worksheet = spreadsheet.worksheet(MENTOR_SHEET_TAB)
@@ -71,14 +138,9 @@ def my_sheet():
         }), 409
 
     sheet_id = get_sheet_id_for_year(year)
-    if not sheet_id:
-        return jsonify({
-            "success": False,
-            "message": f"No Google Sheet has been configured for {year} yet. Ask your mentor to set one up."
-        }), 409
-
-    gc = get_gspread_client()
-    spreadsheet = gc.open_by_key(sheet_id)
+    spreadsheet, err = _open_spreadsheet_or_error(sheet_id, year)
+    if err:
+        return err
 
     # user oda tab name (example: "example")
     try:

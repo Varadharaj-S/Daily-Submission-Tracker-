@@ -25,28 +25,59 @@ value by the time it reaches this module:
 """
 
 from datetime import datetime
+import re
 
 from database.db import get_db
+
+
+def normalize_spreadsheet_id(value):
+    """Accepts either a bare spreadsheet ID or a full Google Sheets URL
+    and always returns just the ID that gspread.open_by_key() expects.
+
+    Examples:
+      "16pG9ABC123"                                            -> "16pG9ABC123"
+      "https://docs.google.com/spreadsheets/d/16pG9ABC123/edit?gid=0"
+                                                                 -> "16pG9ABC123"
+
+    Anything that doesn't look like a Sheets URL is returned unchanged
+    (stripped) so a bare ID always passes through untouched.
+    """
+    value = (value or "").strip()
+    if not value:
+        return ""
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", value)
+    if match:
+        return match.group(1)
+    return value
 
 
 def get_sheet_id_for_year(year):
     """Returns the spreadsheet ID configured for this year, or None if
     no year was given or the mentor hasn't configured a sheet for it
     yet. Callers MUST treat None as "no sheet available" and fail
-    clearly — never fall back to a shared/default spreadsheet ID."""
+    clearly — never fall back to a shared/default spreadsheet ID.
+
+    Normalizes on read (not just on write) so rows that were saved
+    before the URL/ID normalization existed — or that somehow still
+    have a full URL in them — keep working without any manual DB
+    migration."""
     if not year:
         return None
     with get_db() as db:
         row = db.execute(
             "SELECT spreadsheet_id FROM year_sheets WHERE year=?", (str(year),)
         ).fetchone()
-    return row["spreadsheet_id"] if row else None
+    if not row:
+        return None
+    return normalize_spreadsheet_id(row["spreadsheet_id"]) or None
 
 
 def set_sheet_id_for_year(year, spreadsheet_id):
-    """Mentor-only: create or update the spreadsheet mapped to a year."""
+    """Mentor-only: create or update the spreadsheet mapped to a year.
+    Accepts either a bare spreadsheet ID or a full Google Sheets URL —
+    only the normalized ID is ever stored."""
     year = (str(year) if year is not None else "").strip()
-    spreadsheet_id = (spreadsheet_id or "").strip()
+    spreadsheet_id = normalize_spreadsheet_id(spreadsheet_id)
     if not year:
         raise ValueError("year is required")
     if not spreadsheet_id:
@@ -71,20 +102,30 @@ def delete_year_sheet(year):
 
 
 def list_year_sheets():
-    """Every configured year -> spreadsheet mapping, for the mentor UI."""
+    """Every configured year -> spreadsheet mapping, for the mentor UI.
+    Years and spreadsheet IDs are normalized here too (str year, ID-only
+    spreadsheet_id) so the UI never displays/duplicates on a raw DB type
+    or a raw URL."""
     with get_db() as db:
         rows = db.execute(
             "SELECT year, spreadsheet_id, updated_at FROM year_sheets ORDER BY year"
         ).fetchall()
-    return [dict(r) for r in rows]
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["year"] = str(d["year"]).strip() if d["year"] is not None else ""
+        d["spreadsheet_id"] = normalize_spreadsheet_id(d.get("spreadsheet_id"))
+        result.append(d)
+    return result
 
 
 def list_configured_years():
-    return [r["year"] for r in list_year_sheets()]
+    return [str(r["year"]).strip() for r in list_year_sheets() if r["year"] is not None and str(r["year"]).strip()]
 
 
 def is_year_configured(year):
-    return bool(year) and str(year) in list_configured_years()
+    normalized = str(year or "").strip()
+    return bool(normalized) and normalized in list_configured_years()
 
 
 def get_gspread_client():

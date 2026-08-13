@@ -93,6 +93,19 @@ tbody td{padding:.55rem .8rem;vertical-align:middle}
 <script>
 let ME_ID = null;
 
+// PHASE 4: Admin "My Sheet" is year-scoped, same trusted-year pattern
+// mentor.html already uses (?year= in the URL, validated server-side
+// against year_sheets). Admin has no cohort_year of its own, so a year
+// must be explicitly selected here — never inferred from current_user.
+let ADMIN_YEAR = new URLSearchParams(location.search).get("year") || "";
+let ADMIN_CONFIGURED_YEARS = [];
+
+function switchAdminYear(y) {
+  const url = new URL(location.href);
+  url.searchParams.set("year", y);
+  location.href = url.toString();
+}
+
 function adminToast(msg, ok = true) {
   const t = document.getElementById("toast");
   t.textContent = (ok ? "✅ " : "❌ ") + msg;
@@ -291,7 +304,11 @@ function renderAdmin(d) {
         </p>
       </div>
       <div class="admin-topbar-actions">
-        <button class="btn btn-outline" onclick="openMasterSheet()" title="Open the master roster sheet in a new tab">📄 My Sheet</button>
+        ${ADMIN_CONFIGURED_YEARS.length ? `
+        <span class="form-label" style="margin:0;align-self:center">Year:</span>
+        ${ADMIN_CONFIGURED_YEARS.map(y => `<button type="button" class="btn-sm ${y === ADMIN_YEAR ? "btn-primary" : "btn-outline"}" onclick="switchAdminYear('${y}')">${y}</button>`).join("")}
+        ` : ""}
+        <button class="btn btn-outline" onclick="openMasterSheet(ADMIN_YEAR)" title="Open the master roster sheet in a new tab" ${ADMIN_YEAR ? "" : "disabled"}>📄 My Sheet</button>
         <a href="daily_tracker.html" class="btn btn-outline">🗂 Daily Tracker</a>
         <button class="btn btn-primary" onclick="syncAll()">⚡ Sync All</button>
         <button class="btn btn-outline" onclick="doBackup()">💾 Backup</button>
@@ -400,6 +417,16 @@ function renderAdmin(d) {
 (async () => {
   const me = await requireAuth({ admin: true });
   if (!me) return;
+
+  // Load configured years for the "My Sheet" year selector (reuses the
+  // same /admin/year_sheets endpoint mentor.html's year manager uses —
+  // single source of truth for which years exist, no duplicate logic).
+  const yearData = await apiGet("/admin/year_sheets");
+  ADMIN_CONFIGURED_YEARS = ((yearData && yearData.year_sheets) || []).map(y => y.year);
+  if (!ADMIN_YEAR || !ADMIN_CONFIGURED_YEARS.includes(ADMIN_YEAR)) {
+    ADMIN_YEAR = ADMIN_CONFIGURED_YEARS[0] || "";
+  }
+
   const d = await apiGet("/admin");
   d.__me_id = me.id;
   renderAdmin(d);
