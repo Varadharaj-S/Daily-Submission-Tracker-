@@ -98,6 +98,15 @@ def ensure_contest_schema():
         ALTER TABLE contest_events ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ;
         CREATE INDEX IF NOT EXISTS idx_contest_events_synced ON contest_events(synced, sync_attempts);
 
+        -- PHASE 2 fix: a contest must carry its own year/cohort so
+        -- contest_sheet.py / contest_sync.py can always resolve the
+        -- correct year-specific spreadsheet later (on sync, on
+        -- "Refresh Sheet", days after creation) without re-asking
+        -- anyone — same reasoning as users.cohort_year. NULL only for
+        -- contests created before this column existed; never guessed.
+        ALTER TABLE contest_events ADD COLUMN IF NOT EXISTS cohort_year TEXT;
+        CREATE INDEX IF NOT EXISTS idx_contest_events_cohort_year ON contest_events(cohort_year);
+
         CREATE TABLE IF NOT EXISTS contest_sync_log (
             id          SERIAL  PRIMARY KEY,
             contest_id  INTEGER NOT NULL REFERENCES contest_events(id) ON DELETE CASCADE,
@@ -133,7 +142,11 @@ def ensure_contest_schema():
 
 
 def create_contest(contest_name, contest_code, platform, contest_date,
-                    start_time, end_time, created_by):
+                    start_time, end_time, created_by, cohort_year):
+    """`cohort_year` is REQUIRED (PHASE 2 fix) — the contest's Google
+    Sheet can only ever be resolved through the year stored here, never
+    guessed later. Caller (routes/contest.py) must validate it against
+    services.year_sheet_service.is_year_configured() before this runs."""
     contest_code = normalize_contest_code(contest_code)
     with get_db() as db:
         existing = db.execute(
@@ -145,11 +158,11 @@ def create_contest(contest_name, contest_code, platform, contest_date,
         db.execute("""
             INSERT INTO contest_events
             (contest_name, contest_code, platform, contest_date, start_time, end_time,
-             status, sheet_name, created_by)
-            VALUES (?,?,?,?,?,?,?,?,?)
+             status, sheet_name, created_by, cohort_year)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
         """, (contest_name, contest_code, platform, contest_date, start_time, end_time,
               compute_status(contest_date, start_time, end_time),
-              "Student_Contest", created_by))
+              "Student_Contest", created_by, cohort_year))
         db.commit()
 
         row = db.execute(

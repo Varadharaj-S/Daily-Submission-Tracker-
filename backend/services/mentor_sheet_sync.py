@@ -51,9 +51,6 @@ import re
 import threading
 
 import gspread
-from google.oauth2.service_account import Credentials
-
-from normal_sync import CREDENTIALS_FILE
 
 # ── Config (env-overridable) ────────────────────────────────────────────────
 MENTOR_SHEET_TAB = os.environ.get("MENTOR_SHEET_TAB", "SkillRack Sir Class Track")
@@ -69,20 +66,6 @@ STATUS_SOLVED = "Solved"
 STATUS_NOT_SOLVED = "Not Solved"
 
 _lock = threading.Lock()   # gspread client isn't guaranteed thread-safe; serialize writes
-
-
-def _client():
-    scope = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    if os.getenv("GOOGLE_SERVICE_JSON"):
-        import json
-        service_info = json.loads(os.environ["GOOGLE_SERVICE_JSON"])
-        creds = Credentials.from_service_account_info(service_info, scopes=scope)
-    else:
-        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scope)
-    return gspread.authorize(creds)
 
 
 ROSTER_BASE_HEADERS = ["Reg No", "Name", "Branch"]  # Regn Num column removed — Reg No is the key column; no summary "Solved" column — each problem column carries its own status

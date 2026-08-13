@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Recommendation Management – DSA Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+<script src="config.js"></script>
+<style>
+.reco-cat-chip {
+  display: inline-flex; align-items: center; gap: .3rem;
+  padding: .18rem .55rem; border-radius: 99px; font-size: .7rem; font-weight: 700;
+  background: var(--bg4); color: var(--muted); border: 1px solid var(--border2); white-space: nowrap;
+}
+.reco-pin-dot { color: var(--accent); }
+.reco-title-cell { font-weight: 700; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reco-actions-cell { display: flex; gap: .35rem; flex-wrap: wrap; }
+.year-picker { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; align-items: center; }
+
+/* ── Create/Edit modal ────────────────────────────────────────────────── */
+.rm-modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.6); backdrop-filter: blur(3px);
+  z-index: 500; display: flex; align-items: center; justify-content: center; padding: 1.2rem;
+}
+.rm-modal {
+  background: var(--bg2); border: 1px solid var(--border2); border-radius: var(--radius-lg);
+  max-width: 520px; width: 100%; padding: 1.6rem; box-shadow: var(--shadow);
+  max-height: 88vh; overflow-y: auto;
+}
+.rm-modal h3 { font-size: 1.1rem; font-weight: 800; margin-bottom: 1.1rem; }
+.rm-modal-close { float: right; background: none; border: none; color: var(--muted); font-size: 1.3rem; cursor: pointer; }
+.rm-modal-close:hover { color: var(--text); }
+.rm-form { display: flex; flex-direction: column; gap: .9rem; }
+.rm-form-row { display: flex; gap: .9rem; }
+.rm-form-row .form-group { flex: 1; }
+.cat-chip-picker { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .3rem; }
+.cat-chip-btn {
+  padding: .3rem .7rem; border-radius: 99px; font-size: .74rem; font-weight: 700; cursor: pointer;
+  background: var(--bg3); border: 1px solid var(--border2); color: var(--muted);
+}
+.cat-chip-btn.active { background: rgba(251,191,36,.14); border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="noise"></div>
+<div class="grid-bg"></div>
+<div id="navContainer"></div>
+<div class="flash-container" id="flashContainer"></div>
+
+<main class="main-content" id="app">Loading…</main>
+
+<script src="assets/js/main.js"></script>
+<script src="assets/js/app.js"></script>
+<script>
+let CURRENT_YEAR = qs("year") || "";
+let CONFIGURED_YEARS = [];
+let ALL_CATS = ["News", "Internship", "Hackathon", "Contest", "Learning", "Opportunity", "Announcement", "Resource"];
+let RECS = [];
+let EDIT_ID = null;
+
+function withYear(path) {
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}year=${encodeURIComponent(CURRENT_YEAR)}`;
+}
+function switchYear(y) {
+  const url = new URL(location.href);
+  url.searchParams.set("year", y);
+  location.href = url.toString();
+}
+function escapeHtml(s) {
+  return (s || "").replace(/[&<>"']/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+}
+function fmtDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso.slice(0, 10);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+async function loadList(category = "all", q = "") {
+  const params = new URLSearchParams();
+  if (category !== "all") params.set("category", category);
+  if (q) params.set("q", q);
+  const data = await apiGet(withYear("/admin/recommendations") + (params.toString() ? "&" + params.toString() : ""));
+  if (!data.success) return;
+  RECS = data.recommendations || [];
+  renderTable();
+}
+
+function renderTable() {
+  const tbody = document.getElementById("recoTbody");
+  if (!RECS.length) {
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">No recommendations for <strong>${escapeHtml(CURRENT_YEAR)}</strong> yet. Click <strong>+ Add Recommendation</strong> to create one.</div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = RECS.map(r => `
+    <tr>
+      <td class="reco-title-cell">${r.pinned ? '<span class="reco-pin-dot">📌</span> ' : ""}${escapeHtml(r.title)}</td>
+      <td><span class="reco-cat-chip">${escapeHtml(r.category)}</span></td>
+      <td><span class="status-badge ${r.published ? "status-active" : "status-pending"}">${r.published ? "Published" : "Draft"}</span></td>
+      <td class="small muted">${fmtDate(r.created_at)}</td>
+      <td class="small muted">${escapeHtml(r.mentor_name)}</td>
+      <td class="reco-actions-cell">
+        <button type="button" class="btn btn-sm btn-outline" onclick="openEdit(${r.id})">Edit</button>
+        <button type="button" class="btn btn-sm btn-outline" onclick="togglePublish(${r.id})">${r.published ? "Unpublish" : "Publish"}</button>
+        <button type="button" class="btn btn-sm btn-outline" onclick="togglePin(${r.id})">${r.pinned ? "Unpin" : "Pin"}</button>
+        <button type="button" class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="removeReco(${r.id})">Delete</button>
+      </td>
+    </tr>`).join("");
+}
+
+async function togglePublish(id) {
+  const d = await apiPostForm(`/admin/recommendations/${id}/toggle_publish`, {});
+  showToast(d.message || "", d.success ? "success" : "error");
+  if (d.success) loadList(currentCat(), currentQ());
+}
+async function togglePin(id) {
+  const d = await apiPostForm(`/admin/recommendations/${id}/toggle_pin`, {});
+  showToast(d.message || "", d.success ? "success" : "error");
+  if (d.success) loadList(currentCat(), currentQ());
+}
+async function removeReco(id) {
+  if (!confirm("Delete this recommendation? This can't be undone.")) return;
+  const d = await apiPostForm(`/admin/recommendations/${id}/delete`, {});
+  showToast(d.message || "", d.success ? "success" : "error");
+  if (d.success) loadList(currentCat(), currentQ());
+}
+
+function currentCat() { return document.getElementById("catFilter")?.value || "all"; }
+function currentQ() { return document.getElementById("recoSearchInput")?.value || ""; }
+
+function openCreate() {
+  EDIT_ID = null;
+  openModal({ title: "", description: "", category: ALL_CATS[0], external_url: "", image_url: "", pinned: false });
+}
+function openEdit(id) {
+  const r = RECS.find(x => x.id === id);
+  if (!r) return;
+  EDIT_ID = id;
+  openModal(r);
+}
+
+function openModal(r) {
+  const backdrop = document.createElement("div");
+  backdrop.className = "rm-modal-backdrop";
+  backdrop.id = "rmBackdrop";
+  backdrop.onclick = (e) => { if (e.target === backdrop) backdrop.remove(); };
+  backdrop.innerHTML = `
+    <div class="rm-modal">
+      <button class="rm-modal-close" onclick="document.getElementById('rmBackdrop').remove()">✕</button>
+      <h3>${EDIT_ID ? "✏️ Edit Recommendation" : "✨ New Recommendation"} — ${escapeHtml(CURRENT_YEAR)}</h3>
+      <div class="rm-form">
+        <div class="form-group">
+          <label class="form-label">Title</label>
+          <input class="form-input" id="fTitle" value="${escapeHtml(r.title)}" placeholder="e.g. Google Summer Internship">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Category</label>
+          <div class="cat-chip-picker" id="catPicker">
+            ${ALL_CATS.map(c => `<span class="cat-chip-btn ${c.toLowerCase() === (r.category || "").toLowerCase() ? "active" : ""}" data-cat="${c}" onclick="pickCat('${c}')">${c}</span>`).join("")}
+          </div>
+          <input class="form-input mono" id="fCategory" value="${escapeHtml(r.category || ALL_CATS[0])}" style="margin-top:.5rem" placeholder="Or type a custom category">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Description</label>
+          <textarea class="form-input" id="fDescription" rows="4" placeholder="Short description...">${escapeHtml(r.description)}</textarea>
+        </div>
+        <div class="rm-form-row">
+          <div class="form-group">
+            <label class="form-label">Link <span class="form-hint">(optional)</span></label>
+            <input class="form-input" id="fUrl" value="${escapeHtml(r.external_url)}" placeholder="https://...">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Image URL <span class="form-hint">(optional)</span></label>
+            <input class="form-input" id="fImage" value="${escapeHtml(r.image_url)}" placeholder="https://...">
+          </div>
+        </div>
+        <label class="toggle-label">
+          <input type="checkbox" id="fPinned" ${r.pinned ? "checked" : ""}>
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+          📌 Pin to top
+        </label>
+        <button type="button" class="btn btn-primary btn-full" onclick="saveReco()">${EDIT_ID ? "Save Changes" : "Create Recommendation"}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(backdrop);
+}
+function pickCat(c) {
+  document.getElementById("fCategory").value = c;
+  document.querySelectorAll(".cat-chip-btn").forEach(b => b.classList.toggle("active", b.dataset.cat === c));
+}
+
+async function saveReco() {
+  const payload = {
+    title: document.getElementById("fTitle").value.trim(),
+    category: document.getElementById("fCategory").value.trim() || "Announcement",
+    description: document.getElementById("fDescription").value.trim(),
+    external_url: document.getElementById("fUrl").value.trim(),
+    image_url: document.getElementById("fImage").value.trim(),
+    pinned: document.getElementById("fPinned").checked ? "1" : "0",
+    year: CURRENT_YEAR
+  };
+  if (!payload.title) { showToast("Title is required.", "error"); return; }
+
+  const path = EDIT_ID ? `/admin/recommendations/${EDIT_ID}/edit` : "/admin/recommendations";
+  const d = await apiPostForm(path, payload);
+  showToast(d.message || "", d.success ? "success" : "error");
+  if (d.success) {
+    document.getElementById("rmBackdrop")?.remove();
+    loadList(currentCat(), currentQ());
+  }
+}
+
+(async () => {
+  const me = await requireAuth({ admin: true });
+  if (!me) return;
+
+  const yearData = await apiGet("/admin/year_sheets");
+  CONFIGURED_YEARS = ((yearData && yearData.year_sheets) || []).map(y => y.year);
+
+  if (!CONFIGURED_YEARS.length) {
+    document.getElementById("app").innerHTML = `
+      <div class="page-header"><div><h2>💡 Recommendation Management</h2><p class="page-sub">No years configured yet</p></div></div>
+      <p class="muted">Set up at least one year in <a href="mentor.html" style="color:var(--accent)">Mentor Mode</a> first.</p>`;
+    return;
+  }
+  if (!CURRENT_YEAR || !CONFIGURED_YEARS.includes(CURRENT_YEAR)) CURRENT_YEAR = CONFIGURED_YEARS[0];
+
+  document.getElementById("app").innerHTML = `
+    <div class="page-header">
+      <div><h2>💡 Recommendation Management</h2><p class="page-sub">Create News, Internships, Hackathons & more for a specific cohort year</p></div>
+      <a href="mentor.html" class="btn btn-outline">← Mentor Mode</a>
+    </div>
+    <div class="year-picker">
+      <span class="form-label" style="margin:0">Year:</span>
+      ${CONFIGURED_YEARS.map(y => `<button type="button" class="filter-tab ${y === CURRENT_YEAR ? "active" : ""}" onclick="switchYear('${y}')">${y}</button>`).join("")}
+    </div>
+    <div class="filter-bar">
+      <button type="button" class="btn btn-primary" onclick="openCreate()">+ Add Recommendation</button>
+      <select class="form-input" id="catFilter" style="max-width:180px" onchange="loadList(currentCat(), currentQ())">
+        <option value="all">All Categories</option>
+        ${ALL_CATS.map(c => `<option value="${c}">${c}</option>`).join("")}
+      </select>
+      <div class="search-wrap">
+        <input class="form-input search-input" id="recoSearchInput" placeholder="Search title or description…">
+      </div>
+    </div>
+    <div class="table-card">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Title</th><th>Category</th><th>Status</th><th>Date</th><th>Mentor</th><th>Actions</th></tr></thead>
+          <tbody id="recoTbody"><tr><td colspan="6"><div class="empty-state">Loading…</div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
+  let searchTimer;
+  document.getElementById("recoSearchInput").addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => loadList(currentCat(), currentQ()), 300);
+  });
+
+  loadList();
+})();
+</script>
+</body>
+</html>

@@ -155,6 +155,8 @@ def main():
         apply_sql_file(db, os.path.join(HERE, "migrations", "0003_student_identity_fields.sql"))
         apply_sql_file(db, os.path.join(HERE, "migrations", "0004_incremental_sync_timestamps.sql"))
         apply_sql_file(db, os.path.join(HERE, "migrations", "0006_contest_phase3_schema.sql"))
+        apply_sql_file(db, os.path.join(HERE, "migrations", "0007_year_wise_architecture.sql"))
+        apply_sql_file(db, os.path.join(HERE, "migrations", "0008_recommendations.sql"))
 
         print("Phase 1 migration complete.")
     except Exception:

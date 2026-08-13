@@ -1,20 +1,35 @@
 """
-contest/contest_sheet.py — Phase 2+3: the single Student_Contest Google
-Sheet. Creates it once, never again; only ever adds rows (new students)
-and columns (new contests), never deletes or duplicates either.
+contest/contest_sheet.py — the per-year Student_Contest Google Sheet tab.
+
+PHASE 2 FIX: this used to hardcode ONE shared spreadsheet (SHEET_ID) for
+every student's contest tracking, regardless of year. That's gone —
+services/year_sheet_service.py is now the ONLY year -> spreadsheet
+resolver, same as normal_sync.py / mentor_sheet_sync.py / bot_sheet_sync.py.
+Every function here takes an explicit `year`, resolved by the caller:
+  - routes/contest.py (mentor/admin operations): year comes from the
+    request, validated against services.year_sheet_service.is_year_configured()
+    before it ever reaches this module.
+  - contest_sync.py (automated grading): year comes from the contest's
+    OWN stored cohort_year column (contest_events.cohort_year) — never
+    re-derived from a request, never guessed.
+There is no fallback to a shared/default spreadsheet anywhere below —
+if `year` doesn't resolve to a configured sheet,
+services.year_sheet_service.open_year_spreadsheet() raises, and every
+function here surfaces that as a clear (False, message) result rather
+than silently writing somewhere else.
 
 IMPORTANT — this file could not be tested against the live Google Sheets
 API in the environment it was written in (no network access to
-googleapis.com there). It follows the exact same gspread + service-account
-auth pattern as normal_sync.py's get_sheet(), which IS known-working in
-your deployment, and the column/row logic below is unit-tested against an
-in-memory fake in contest/tests/test_contest_sheet_logic.py (see that file
-— it exercises the real functions here, just swaps out the gspread client
-for a fake one that behaves like a real spreadsheet). But you should still
-do one real end-to-end test (create a contest, check the actual sheet)
+googleapis.com there). It follows the exact same
+services.year_sheet_service auth/resolution pattern as
+normal_sync.py's get_sheet(), which IS known-working in your deployment,
+and the column/row logic below is unit-tested against an in-memory fake
+in contest/tests/test_contest_sheet_logic.py. But you should still do
+one real end-to-end test (create a contest, check the actual sheet)
 before relying on this in front of students.
 
-Sheet layout (fixed, per the Contest Tracker design doc):
+Sheet layout (fixed, per the Contest Tracker design doc), inside THAT
+YEAR's spreadsheet:
 
     Reg No | Roll No | Name | Branch | <contest_code_1> | <contest_code_2> | ... | Total Solved | Contests Attended | Attendance % | _user_id
 
@@ -26,16 +41,11 @@ its own — see the migration 0003 docstring and the conversation this was
 built from). Admins can ignore that column; nothing in the UI surfaces it.
 """
 
-import os
-import json
-
 import gspread
-from google.oauth2.service_account import Credentials
 
 from database.db import get_db
+from services.year_sheet_service import open_year_spreadsheet
 
-SHEET_ID = "1vucuD_-SCKFDJYC-XWNRPGJkXqu_3CyOVDTnFRezusE"
-CREDENTIALS_FILE = "valiant-splicer-489013-q2-40d3ac23a2d8.json"
 STUDENT_CONTEST_TAB = "Student_Contest"
 
 BASE_COLUMNS = ["Reg No", "Roll No", "Name", "Branch"]
@@ -44,28 +54,16 @@ KEY_COLUMN = "_user_id"
 ABSENT_MARKER = "ABS"
 
 
-# ── Auth (same pattern as normal_sync.py's get_sheet) ─────────────────────────
-def _get_client():
-    scope = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    if os.getenv("GOOGLE_SERVICE_JSON"):
-        service_info = json.loads(os.environ["GOOGLE_SERVICE_JSON"])
-        creds = Credentials.from_service_account_info(service_info, scopes=scope)
-    else:
-        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scope)
-    return gspread.authorize(creds)
+def _get_spreadsheet(year):
+    """Resolves `year` to that year's spreadsheet via
+    services.year_sheet_service — raises ValueError if the year has no
+    sheet configured yet (no fallback to any shared/default sheet)."""
+    return open_year_spreadsheet(year)
 
 
-def _get_spreadsheet(client=None):
-    client = client or _get_client()
-    return client.open_by_key(SHEET_ID)
-
-
-# ── Sheet creation (once, ever) ────────────────────────────────────────────────
-def get_or_create_student_contest_sheet(client=None):
-    spreadsheet = _get_spreadsheet(client)
+# ── Sheet creation (once per year, ever) ───────────────────────────────────
+def get_or_create_student_contest_sheet(year):
+    spreadsheet = _get_spreadsheet(year)
     try:
         sheet = spreadsheet.worksheet(STUDENT_CONTEST_TAB)
     except gspread.exceptions.WorksheetNotFound:
@@ -94,10 +92,10 @@ def _col_index(header, name):
 
 
 # ── Student import (additive only — never deletes, never duplicates) ─────────
-def import_students(sheet):
-    """Adds any active, non-admin student not already present on the sheet
-    (matched by the hidden _user_id column). Returns the number of rows
-    added."""
+def import_students(sheet, year):
+    """Adds any active, non-admin student IN THIS YEAR ONLY who isn't
+    already present on the sheet (matched by the hidden _user_id
+    column). Returns the number of rows added."""
     header = _header(sheet)
     all_values = sheet.get_all_values()
     uid_col = _col_index(header, KEY_COLUMN) - 1  # 0-based for list indexing
@@ -107,9 +105,9 @@ def import_students(sheet):
         students = db.execute("""
             SELECT id, username, full_name, reg_no, roll_no, branch
             FROM users
-            WHERE status='active' AND is_admin=0
+            WHERE status='active' AND is_admin=0 AND cohort_year=?
             ORDER BY username ASC
-        """).fetchall()
+        """, (str(year),)).fetchall()
 
     contest_cols = _contest_columns(header)
     new_rows = []
@@ -205,20 +203,24 @@ def recalculate_summary(sheet):
 # ── Orchestration — called from routes/contest.py on contest creation ────────
 def ensure_sheet_for_contest(contest):
     """
-    contest: dict with at least 'contest_code'.
-    Runs the full Phase 2+3 flow for one newly created contest:
-    get/create sheet -> import any new students -> add the contest column
-    -> recalculate summary columns.
+    contest: dict with at least 'contest_code' and 'cohort_year' (the
+    contest's OWN stored year — see contest_events.cohort_year).
+    Runs the full flow for one newly created contest: get/create THAT
+    YEAR's sheet -> import any new students in that year -> add the
+    contest column -> recalculate summary columns.
 
-    Returns (ok: bool, message: str). Never raises — callers (routes) treat
-    a Sheets failure as non-fatal: the contest still exists in Postgres
-    either way, same as how email failures don't block signup elsewhere
-    in this app.
+    Returns (ok: bool, message: str). Never raises — callers (routes)
+    treat a Sheets failure as non-fatal: the contest still exists in
+    Postgres either way, same as how email failures don't block signup
+    elsewhere in this app.
     """
+    year = (contest.get("cohort_year") or "").strip() if contest.get("cohort_year") else None
+    if not year:
+        return False, "This contest has no year/cohort set — cannot resolve a spreadsheet."
     try:
-        sheet = get_or_create_student_contest_sheet()
+        sheet = get_or_create_student_contest_sheet(year)
         repair_stray_columns(sheet)
-        added = import_students(sheet)
+        added = import_students(sheet, year)
         created_col = add_contest_column(sheet, contest["contest_code"])
         if created_col:
             recalculate_summary(sheet)
@@ -229,21 +231,27 @@ def ensure_sheet_for_contest(contest):
         return False, f"Google Sheet sync failed: {e}"
 
 
-def write_contest_results(contest_code, results_by_user_id):
+def write_contest_results(contest_code, results_by_user_id, year):
     """Writes each participant's solved count into the contest's column
-    (matched by the hidden _user_id column), then recalculates the summary
-    columns. Anyone in results_by_user_id who didn't solve anything
-    (participated=False) is written as ABS, same marker as a student who
-    was never touched at all — there's no separate "attempted, solved
-    zero" signal in this design (see contest_sync.py's module docstring).
+    (matched by the hidden _user_id column) IN THAT CONTEST'S YEAR sheet,
+    then recalculates the summary columns. Anyone in results_by_user_id
+    who didn't solve anything (participated=False) is written as ABS,
+    same marker as a student who was never touched at all — there's no
+    separate "attempted, solved zero" signal in this design (see
+    contest_sync.py's module docstring).
 
     results_by_user_id: {user_id (int): {"solved": int, "participated": bool, ...}}
+    year: the contest's OWN stored cohort_year — never re-derived from a
+    request. A contest created for 2028 can only ever write results to
+    the 2028 spreadsheet, regardless of who triggers the sync.
 
     Returns (ok: bool, message: str). Never raises — same non-fatal
     contract as ensure_sheet_for_contest()/refresh_sheet() above.
     """
+    if not year:
+        return False, "This contest has no year/cohort set — cannot resolve a spreadsheet."
     try:
-        sheet = get_or_create_student_contest_sheet()
+        sheet = get_or_create_student_contest_sheet(year)
         header = _header(sheet)
         col_idx = _col_index(header, contest_code)
         if not col_idx:
@@ -299,14 +307,16 @@ def repair_stray_columns(sheet):
     return len(junk_positions)
 
 
-def refresh_sheet():
-    """Re-import students, clean up any stray junk columns from the
-    insert_cols() bug, and recalculate summary columns — used by an
-    admin's 'Refresh Sheet' action."""
+def refresh_sheet(year):
+    """Re-import students (in THAT YEAR), clean up any stray junk columns
+    from the insert_cols() bug, and recalculate summary columns — used by
+    an admin's 'Refresh Sheet' action for one specific year."""
+    if not year:
+        return False, "Select a year first."
     try:
-        sheet = get_or_create_student_contest_sheet()
+        sheet = get_or_create_student_contest_sheet(year)
         removed = repair_stray_columns(sheet)
-        added = import_students(sheet)
+        added = import_students(sheet, year)
         recalculate_summary(sheet)
         msg = f"Sheet refreshed ({added} new student(s) imported"
         if removed:

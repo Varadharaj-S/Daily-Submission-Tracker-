@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Recommendations – DSA Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+<script src="config.js"></script>
+<style>
+/* ── Recommendation cards (student view) ─────────────────────────────── */
+.reco-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1.1rem;
+  margin-top: 1.2rem;
+}
+.reco-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
+  overflow: hidden;
+  transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+  cursor: pointer;
+}
+.reco-card.no-image::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: var(--accent);
+  opacity: .55;
+}
+.reco-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--border3);
+  box-shadow: 0 10px 28px rgba(0,0,0,.35);
+}
+.reco-card.pinned { border-color: rgba(251,191,36,.35); }
+.reco-pin-tag {
+  position: absolute; top: .7rem; right: .8rem; z-index: 2;
+  font-size: .68rem; font-weight: 800; color: var(--accent);
+  letter-spacing: .04em;
+  background: rgba(8,8,8,.65); backdrop-filter: blur(2px);
+  padding: .2rem .55rem; border-radius: 99px;
+}
+/* ── Card thumbnail (only rendered when image_url is present) ──────────── */
+.reco-card-img-wrap {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: var(--bg3);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.reco-card-img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform .3s ease;
+}
+.reco-card:hover .reco-card-img { transform: scale(1.045); }
+.reco-card-body { padding: 1.25rem 1.3rem; display: flex; flex-direction: column; gap: .65rem; flex: 1; }
+.reco-cat-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.reco-badge {
+  display: inline-flex; align-items: center; gap: .3rem;
+  padding: .22rem .6rem; border-radius: 99px;
+  font-size: .68rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+  background: var(--bg4); color: var(--muted); border: 1px solid var(--border2);
+}
+.reco-badge.cat-news         { background: rgba(77,157,224,.12);  color: var(--cf); border-color: rgba(77,157,224,.25); }
+.reco-badge.cat-internship   { background: rgba(52,211,153,.12);  color: var(--ac); border-color: rgba(52,211,153,.25); }
+.reco-badge.cat-hackathon    { background: rgba(251,191,36,.12);  color: var(--accent); border-color: rgba(251,191,36,.25); }
+.reco-badge.cat-contest      { background: rgba(248,113,113,.12); color: var(--danger); border-color: rgba(248,113,113,.25); }
+.reco-badge.cat-learning     { background: rgba(167,139,250,.14); color: #a78bfa; border-color: rgba(167,139,250,.28); }
+.reco-badge.cat-opportunity  { background: rgba(52,211,153,.12);  color: var(--success); border-color: rgba(52,211,153,.25); }
+.reco-badge.cat-announcement { background: rgba(251,146,60,.13);  color: var(--warning); border-color: rgba(251,146,60,.28); }
+.reco-badge.cat-resource     { background: rgba(255,255,255,.06); color: var(--text); border-color: var(--border3); }
+.reco-title { font-size: 1.02rem; font-weight: 800; letter-spacing: -.01em; line-height: 1.3; }
+.reco-desc { font-size: .84rem; color: var(--muted); line-height: 1.55; flex: 1;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.reco-meta { display: flex; align-items: center; justify-content: space-between; gap: .6rem; font-size: .72rem; color: var(--dim); font-family: var(--mono); margin-top: .1rem; }
+.reco-meta .src { display: flex; align-items: center; gap: .3rem; }
+.reco-actions { display: flex; gap: .55rem; margin-top: .3rem; }
+.reco-actions .btn { flex: 1; justify-content: center; }
+
+/* ── Empty state (friendly) ──────────────────────────────────────────── */
+.reco-empty { text-align: center; padding: 3.5rem 1.5rem; color: var(--dim); }
+.reco-empty .emoji { font-size: 2.6rem; margin-bottom: .8rem; }
+.reco-empty h3 { color: var(--muted); font-size: 1.05rem; margin-bottom: .35rem; }
+.reco-empty p { font-size: .85rem; }
+
+/* ── Detail modal ─────────────────────────────────────────────────────── */
+.reco-modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.6); backdrop-filter: blur(3px);
+  z-index: 500; display: flex; align-items: center; justify-content: center; padding: 1.2rem;
+  animation: fadeIn .15s ease;
+}
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+.reco-modal {
+  background: var(--bg2); border: 1px solid var(--border2); border-radius: var(--radius-lg);
+  max-width: 480px; width: 100%; padding: 0; box-shadow: var(--shadow);
+  max-height: 84vh; overflow-y: auto; position: relative;
+}
+.reco-modal-body { padding: 1.6rem; }
+.reco-modal-img-wrap { width: 100%; aspect-ratio: 16 / 9; background: var(--bg3); overflow: hidden; }
+.reco-modal-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.reco-modal-close { float: right; background: none; border: none; color: var(--muted); font-size: 1.3rem; cursor: pointer; line-height: 1; }
+.reco-modal-close.over-img {
+  position: absolute; top: .6rem; right: .7rem; color: #fff;
+  background: rgba(8,8,8,.55); border-radius: 50%; width: 28px; height: 28px; z-index: 2;
+}
+.reco-modal-close:hover { color: var(--text); }
+.reco-modal h2 { font-size: 1.2rem; font-weight: 800; margin: .6rem 0 .5rem; }
+.reco-modal .reco-desc { -webkit-line-clamp: unset; white-space: pre-wrap; color: var(--text); font-size: .88rem; }
+
+@media (max-width: 640px) {
+  .reco-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="noise"></div>
+<div class="grid-bg"></div>
+<div id="navContainer"></div>
+<div class="flash-container" id="flashContainer"></div>
+
+<main class="main-content" id="app">Loading…</main>
+
+<script src="assets/js/main.js"></script>
+<script src="assets/js/app.js"></script>
+<script>
+const CAT_ICON = {
+  news: "📰", internship: "💼", hackathon: "🛠", contest: "🏆",
+  learning: "📚", opportunity: "✨", announcement: "📣", resource: "🔗"
+};
+function catClass(cat) { return "cat-" + (cat || "announcement").toLowerCase().replace(/[^a-z]/g, ""); }
+function catIcon(cat) { return CAT_ICON[(cat || "").toLowerCase()] || "💡"; }
+function escapeHtml(s) {
+  return (s || "").replace(/[&<>"']/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+}
+function fmtDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso.slice(0, 10);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+let ALL_RECS = [];
+let CATS = [];
+let ACTIVE_CAT = "all";
+
+function renderGrid(list) {
+  const grid = document.getElementById("recoGrid");
+  if (!list.length) {
+    grid.innerHTML = `
+      <div class="reco-empty" style="grid-column:1/-1">
+        <div class="emoji">🌱</div>
+        <h3>Nothing here yet</h3>
+        <p>Your mentor hasn't posted anything in this category. Check back soon!</p>
+      </div>`;
+    return;
+  }
+  grid.innerHTML = list.map(r => `
+    <div class="reco-card ${r.pinned ? "pinned" : ""} ${r.image_url ? "" : "no-image"}" onclick="openDetail(${r.id})">
+      ${r.pinned ? `<span class="reco-pin-tag">📌 Pinned</span>` : ""}
+      ${r.image_url ? `
+      <div class="reco-card-img-wrap">
+        <img class="reco-card-img" src="${escapeHtml(r.image_url)}" alt="${escapeHtml(r.title)}" loading="lazy"
+             onerror="this.closest('.reco-card-img-wrap').remove(); this.closest('.reco-card')?.classList.add('no-image')">
+      </div>` : ""}
+      <div class="reco-card-body">
+        <div class="reco-cat-row">
+          <span class="reco-badge ${catClass(r.category)}">${catIcon(r.category)} ${escapeHtml(r.category)}</span>
+        </div>
+        <div class="reco-title">${escapeHtml(r.title)}</div>
+        <div class="reco-desc">${escapeHtml(r.description)}</div>
+        <div class="reco-meta">
+          <span class="src">👤 ${escapeHtml(r.mentor_name)}</span>
+          <span>${fmtDate(r.created_at)}</span>
+        </div>
+        <div class="reco-actions">
+          <button type="button" class="btn btn-outline btn-sm" onclick="event.stopPropagation();openDetail(${r.id})">View Details →</button>
+          ${r.external_url ? `<a href="${escapeHtml(r.external_url)}" target="_blank" rel="noopener" class="btn btn-primary btn-sm" onclick="event.stopPropagation()">Open Link ↗</a>` : ""}
+        </div>
+      </div>
+    </div>`).join("");
+}
+
+function applyFilter(cat) {
+  ACTIVE_CAT = cat;
+  document.querySelectorAll(".filter-tab[data-cat]").forEach(t =>
+    t.classList.toggle("active", t.dataset.cat === cat));
+  const list = cat === "all" ? ALL_RECS : ALL_RECS.filter(r => (r.category || "").toLowerCase() === cat.toLowerCase());
+  renderGrid(list);
+}
+
+async function doSearch(q) {
+  const me = await requireAuth({ verified: true });
+  if (!me) return;
+  const data = await apiGet(`/recommendations?q=${encodeURIComponent(q)}`);
+  ALL_RECS = data.recommendations || [];
+  applyFilter(ACTIVE_CAT);
+}
+
+function openDetail(id) {
+  const r = ALL_RECS.find(x => x.id === id);
+  if (!r) return;
+  const backdrop = document.createElement("div");
+  backdrop.className = "reco-modal-backdrop";
+  backdrop.onclick = (e) => { if (e.target === backdrop) backdrop.remove(); };
+  backdrop.innerHTML = `
+    <div class="reco-modal">
+      ${r.image_url ? `
+      <div class="reco-modal-img-wrap">
+        <img class="reco-modal-img" src="${escapeHtml(r.image_url)}" alt="${escapeHtml(r.title)}"
+             onerror="this.closest('.reco-modal-img-wrap').remove(); document.getElementById('recoModalClose')?.classList.remove('over-img')">
+      </div>
+      <button class="reco-modal-close over-img" id="recoModalClose" onclick="this.closest('.reco-modal-backdrop').remove()">✕</button>
+      <div class="reco-modal-body">` : `
+      <div class="reco-modal-body">
+      <button class="reco-modal-close" id="recoModalClose" onclick="this.closest('.reco-modal-backdrop').remove()">✕</button>`}
+      <span class="reco-badge ${catClass(r.category)}">${catIcon(r.category)} ${escapeHtml(r.category)}</span>
+      <h2>${escapeHtml(r.title)}</h2>
+      <div class="reco-meta" style="margin-bottom:.9rem">
+        <span class="src">👤 ${escapeHtml(r.mentor_name)}</span>
+        <span>${fmtDate(r.created_at)}</span>
+      </div>
+      <div class="reco-desc">${escapeHtml(r.description) || "<em>No further details.</em>"}</div>
+      ${r.external_url ? `<a href="${escapeHtml(r.external_url)}" target="_blank" rel="noopener" class="btn btn-primary btn-full" style="margin-top:1.2rem">Open Link ↗</a>` : ""}
+      </div>
+    </div>`;
+  document.body.appendChild(backdrop);
+}
+
+(async () => {
+  const me = await requireAuth({ verified: true });
+  if (!me) return;
+
+  document.getElementById("app").innerHTML = `
+    <div class="page-header">
+      <div><h2>💡 Recommendations</h2><p class="page-sub">Curated by your mentor${me.cohort_year ? " · Cohort " + escapeHtml(me.cohort_year) : ""}</p></div>
+    </div>
+    <div class="filter-bar">
+      <div class="filter-tabs" id="catTabs"></div>
+      <div class="search-wrap">
+        <input class="form-input search-input" id="recoSearch" placeholder="Search recommendations…">
+      </div>
+    </div>
+    <div class="reco-grid" id="recoGrid"><div class="reco-empty" style="grid-column:1/-1">Loading…</div></div>
+  `;
+
+  const data = await apiGet("/recommendations");
+  if (!data.success) return;
+
+  if (!data.cohort_year) {
+    document.getElementById("app").innerHTML = `
+      <div class="page-header"><div><h2>💡 Recommendations</h2></div></div>
+      <div class="reco-empty">
+        <div class="emoji">🎓</div>
+        <h3>You're not assigned to a year yet</h3>
+        <p>${escapeHtml(data.message || "Ask your mentor to assign your cohort year.")}</p>
+      </div>`;
+    return;
+  }
+
+  ALL_RECS = data.recommendations || [];
+  CATS = data.categories || [];
+
+  const tabs = ["all", ...CATS];
+  document.getElementById("catTabs").innerHTML = tabs.map(c => `
+    <button type="button" class="filter-tab ${c === "all" ? "active" : ""}" data-cat="${c}" onclick="applyFilter('${c}')">
+      ${c === "all" ? "All" : catIcon(c) + " " + escapeHtml(c)}
+    </button>`).join("");
+
+  renderGrid(ALL_RECS);
+
+  let searchTimer;
+  document.getElementById("recoSearch").addEventListener("input", (e) => {
+    clearTimeout(searchTimer);
+    const q = e.target.value;
+    searchTimer = setTimeout(() => doSearch(q), 300);
+  });
+})();
+</script>
+</body>
+</html>

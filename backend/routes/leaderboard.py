@@ -38,7 +38,7 @@ ORDER BY
     substr(solved_date,7,4) DESC,
     substr(solved_date,4,2) DESC,
     substr(solved_date,1,2) DESC
-""", (current_user.id,)).fetchall()
+""", (user.id,)).fetchall()
         fol_c = db.execute("SELECT COUNT(*) as c FROM follows WHERE following_id=?",
                            (user.id,)).fetchone()["c"]
         fwg_c = db.execute("SELECT COUNT(*) as c FROM follows WHERE follower_id=?",
@@ -50,7 +50,7 @@ ORDER BY
                 (current_user.id, user.id)
             ).fetchone())
     data = get_dashboard_data(subs)
-    total, solved = get_counts(current_user.id)
+    total, solved = get_counts(user.id)
     data["total"] = total
     data["solved"] = solved
     profile_user_dict = {k: v for k, v in vars(user).items() if k not in

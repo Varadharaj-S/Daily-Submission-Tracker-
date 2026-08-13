@@ -106,11 +106,13 @@ function renderNav(me) {
       <a href="admin.html" class="nav-link ${active(["admin.html"])}">👑 Admin</a>
       <a href="mentor.html" class="nav-link ${active(["mentor.html"])}">🎓 Mentor</a>
       <a href="contest_dashboard.html" class="nav-link ${active(["contest_dashboard.html","contest_create.html","contest_history.html"])}">⭐ Student Contest</a>
-      <a href="admin_students.html" class="nav-link ${active(["admin_students.html"])}">🧾 Students</a>`;
+      <a href="admin_students.html" class="nav-link ${active(["admin_students.html"])}">🧾 Students</a>
+      <a href="mentor_recommendations.html" class="nav-link ${active(["mentor_recommendations.html"])}">💡 Recommendations</a>`;
   } else {
     links = `
       <a href="dashboard.html" class="nav-link ${active(["dashboard.html","index.html",""])}">Dashboard</a>
       <a href="problems.html" class="nav-link ${active(["problems.html"])}">Problems</a>
+      <a href="recommendations.html" class="nav-link ${active(["recommendations.html"])}">💡 Recommendations</a>
       <a href="weekly_report.html" class="nav-link ${active(["weekly_report.html"])}">📊 Report</a>
       <a href="daily_tracker.html" class="nav-link ${active(["daily_tracker.html"])}">🗂 Daily Tracker</a>
       <a href="leaderboard.html" class="nav-link ${active(["leaderboard.html"])}">Leaderboard</a>

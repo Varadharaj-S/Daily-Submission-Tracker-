@@ -204,8 +204,10 @@ def sync_one_contest(contest):
             db.commit()
 
         # ── Google Sheet: batch column write + attendance/summary recalc ──
+        # year comes from the contest's OWN stored record, never
+        # re-derived from a request — see contest_sheet.py's module docstring.
         sheet_ok, sheet_msg = contest_sheet.write_contest_results(
-            contest["contest_code"], results_by_user_id
+            contest["contest_code"], results_by_user_id, contest.get("cohort_year")
         )
 
         with get_db() as db:

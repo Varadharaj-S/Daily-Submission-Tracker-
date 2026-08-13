@@ -23,6 +23,7 @@ from utils.security import sanitize
 from contest import contest_service
 from contest import contest_sheet
 from contest import contest_sync
+from services.year_sheet_service import is_year_configured, list_configured_years
 
 
 # PART 5 (frontend/backend split): this module was never migrated when the
@@ -48,6 +49,7 @@ def student_contest():
         "contests": contests,
         "counts": counts,
         "total_contests": len(contests),
+        "years": list_configured_years(),
     })
 
 
@@ -61,9 +63,18 @@ def contest_create():
     contest_date = request.form.get("contest_date", "")
     start_time = request.form.get("start_time", "")
     end_time = request.form.get("end_time", "")
+    # PHASE 2 fix: a contest must carry its own year/cohort so its sheet
+    # can always be resolved later (see contest_service.create_contest's
+    # docstring). Mentor/admin picks it explicitly — validated against
+    # actually-configured years, never trusted blindly (catches typos
+    # the same way every other mentor/<year> endpoint does).
+    cohort_year = sanitize(request.form.get("cohort_year", ""), 16)
 
-    if not (name and code and contest_date and start_time and end_time):
-        return jsonify({"success": False, "message": "All fields are required."}), 400
+    if not (name and code and contest_date and start_time and end_time and cohort_year):
+        return jsonify({"success": False, "message": "All fields are required, including year/cohort."}), 400
+
+    if not is_year_configured(cohort_year):
+        return jsonify({"success": False, "message": f"'{cohort_year}' has no Google Sheet configured yet — set one up first."}), 400
 
     if platform not in ("Codeforces", "LeetCode", "AtCoder"):
         return jsonify({"success": False, "message": "Invalid platform."}), 400
@@ -79,12 +90,12 @@ def contest_create():
         return jsonify({"success": False, "message": "End time must be after start time."}), 400
 
     row, error = contest_service.create_contest(
-        name, code, platform, contest_date, start_time, end_time, current_user.id
+        name, code, platform, contest_date, start_time, end_time, current_user.id, cohort_year
     )
     if error:
         return jsonify({"success": False, "message": error}), 400
 
-    log_admin("create_contest", target=code, details=name)
+    log_admin("create_contest", target=code, details=f"{name} ({cohort_year})")
 
     sheet_ok, sheet_msg = contest_sheet.ensure_sheet_for_contest(dict(row))
     if sheet_ok:
@@ -146,8 +157,14 @@ def contest_history():
 @login_required
 @admin_required
 def contest_refresh_sheet():
-    ok, msg = contest_sheet.refresh_sheet()
-    log_admin("refresh_contest_sheet", details=msg)
+    # PHASE 2 fix: "refresh sheet" now targets ONE year's spreadsheet —
+    # required, validated against configured years (same pattern as
+    # every mentor/<year> endpoint in routes/admin.py).
+    year = sanitize(request.form.get("year", ""), 16)
+    if not year or not is_year_configured(year):
+        return jsonify({"success": False, "message": "Select a valid, configured year first."}), 400
+    ok, msg = contest_sheet.refresh_sheet(year)
+    log_admin("refresh_contest_sheet", details=f"{year}: {msg}")
     return jsonify({"success": ok, "message": msg})
 
 

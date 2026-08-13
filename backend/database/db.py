@@ -329,18 +329,103 @@ def ensure_year_schema():
         db.commit()
 
 
+def ensure_recommendation_schema():
+    """
+    PHASE 3 — mentor Recommendation + News system.
+
+    ONE reusable `recommendations` table (no recommendations_2028-style
+    per-year tables). Year isolation is a WHERE-clause concern
+    (cohort_year column), not a schema/table concern — same pattern as
+    users.cohort_year from Phase 2's ensure_year_schema().
+
+    `category` is a free-text TEXT column, not an enum — this keeps the
+    set of categories (News/Internship/Hackathon/...) a UI-level concern
+    (routes/recommendations.py ships a suggested list) instead of a
+    schema migration every time a mentor wants a new one.
+
+    Called unconditionally at import time, same reasoning as
+    ensure_year_schema()/ensure_extension_schema(): this also has to run
+    on Vercel, which never executes the `python app.py` __main__ block.
+
+    Formal migration counterpart: database/migrations/0008_recommendations.sql
+    (same coexistence pattern as ensure_contest_schema() +
+    0002_contest_tracker.sql/0006_contest_phase3_schema.sql — this
+    function guarantees cold starts never 500 on a fresh DB; the
+    migration file is the reviewable, ordered schema record for
+    `python database/migrate.py`). Kept intentionally in sync — if you
+    change one, change the other.
+    """
+    with get_db() as db:
+        try:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS recommendations (
+                    id           SERIAL PRIMARY KEY,
+                    cohort_year  TEXT NOT NULL,
+                    title        TEXT NOT NULL,
+                    description  TEXT DEFAULT '',
+                    category     TEXT DEFAULT 'Announcement',
+                    external_url TEXT DEFAULT '',
+                    image_url    TEXT DEFAULT '',
+                    created_by   INTEGER,
+                    created_at   TEXT DEFAULT '',
+                    updated_at   TEXT DEFAULT '',
+                    published    INTEGER DEFAULT 1,
+                    pinned       INTEGER DEFAULT 0
+                )
+            """)
+        except Exception:
+            pass
+        try:
+            db.execute("CREATE INDEX IF NOT EXISTS idx_reco_cohort_year ON recommendations(cohort_year)")
+        except Exception:
+            pass
+        try:
+            db.execute("CREATE INDEX IF NOT EXISTS idx_reco_cohort_published ON recommendations(cohort_year, published)")
+        except Exception:
+            pass
+        try:
+            db.execute("CREATE INDEX IF NOT EXISTS idx_reco_category ON recommendations(category)")
+        except Exception:
+            pass
+        db.commit()
+
+
 def ensure_db_columns():
     """Legacy-DB column patcher: adds columns that init_db()'s CREATE TABLE
     IF NOT EXISTS won't add to an already-existing table. Moved verbatim
-    from app.py, where it ran once on startup."""
-    with get_db() as db:
-        for stmt in [
-            "ALTER TABLE users ADD COLUMN lc_imported INTEGER DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN auto_sync_enabled INTEGER DEFAULT 1",
-            "ALTER TABLE users ADD COLUMN sync_time TEXT DEFAULT '09:00'",
-        ]:
-            try:
+    from app.py, where it ran once on startup.
+
+    PHASE 4 FIX: these statements didn't use "IF NOT EXISTS", and on any
+    DB where init_db()'s baseline CREATE TABLE already includes
+    lc_imported/auto_sync_enabled/sync_time (i.e. every DB created from
+    the current schema — only genuinely pre-Phase-1 DBs need this patch),
+    the very first ALTER TABLE in the loop raised a duplicate-column
+    error that aborted the whole Postgres transaction. The bare
+    except/pass caught the Python exception but never rolled back, so
+    every statement after it (including full_name/reg_no/roll_no/branch
+    below, added in this phase) silently failed too — the "aborted
+    transaction" error was swallowed the same way. Each statement now
+    gets its own connection/transaction so one already-applied column
+    can't poison the rest."""
+    stmts = [
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS lc_imported INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_sync_enabled INTEGER DEFAULT 1",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS sync_time TEXT DEFAULT '09:00'",
+        # full_name/reg_no/roll_no/branch are read/written throughout
+        # routes/auth.py (signup), routes/admin.py (student profile edit),
+        # and routes/recommendations.py (mentor_name join) but were never
+        # added by any migration — signup and the recommendations feed
+        # both 500'd on a fresh/current DB because these columns simply
+        # didn't exist yet.
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name TEXT DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS reg_no TEXT DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS roll_no TEXT DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS branch TEXT DEFAULT ''",
+    ]
+    for stmt in stmts:
+        try:
+            with get_db() as db:
                 db.execute(stmt)
-            except Exception:
-                pass
-        db.commit()
+                db.commit()
+        except Exception as e:
+            print(f"[ensure_db_columns] statement failed, continuing: {stmt!r}: {e}")

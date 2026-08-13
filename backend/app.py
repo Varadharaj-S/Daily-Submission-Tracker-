@@ -22,7 +22,7 @@ the assembly point:
 import os
 
 from extensions import app
-from database.db import init_db, ensure_extension_schema, ensure_year_schema
+from database.db import init_db, ensure_extension_schema, ensure_year_schema, ensure_recommendation_schema, ensure_db_columns
 from services.tracker_service import ensure_tracker_schema
 from contest.contest_service import ensure_contest_schema
 
@@ -47,6 +47,23 @@ ensure_year_schema()
 # on every cold start, including under wsgi.py/gunicorn on Vercel.
 ensure_contest_schema()
 
+# PHASE 3 — recommendations table (mentor Recommendation + News system,
+# year-isolated via cohort_year). Same unconditional-on-cold-start
+# reasoning as ensure_year_schema() above.
+ensure_recommendation_schema()
+
+# PHASE 4 FIX: ensure_db_columns() (full_name/reg_no/roll_no/branch/
+# lc_imported/auto_sync_enabled/sync_time) and ensure_tracker_schema() were
+# only being called inside the `if __name__ == "__main__":` block below —
+# meaning gunicorn/Vercel production cold starts (which import this module,
+# they don't run it as __main__) never got these columns/tables patched in.
+# That's the exact same class of bug the comment above ensure_contest_schema()
+# already describes and fixed for the contest tables; these two were missed.
+# Moved here, unconditional, same reasoning as every other ensure_*() call
+# on this page.
+ensure_db_columns()
+ensure_tracker_schema()
+
 # ── Route modules (import for side-effect route registration) ───────────────
 from routes import auth            # noqa: E402,F401  /, /login, /signup, /logout, /admin/login, email verification
 from routes import dashboard       # noqa: E402,F401  /dashboard, challenge/mentor completion
@@ -59,6 +76,7 @@ from routes import leaderboard     # noqa: E402,F401  /user/<username>, /follow,
 from routes import admin           # noqa: E402,F401  /admin/*
 from routes import reports         # noqa: E402,F401  /weekly_report, /weekly_csv, /api/weekly_report
 from routes import contest        # noqa: E402,F401  /student_contest, /contest/* (Contest Tracker, Phase 1)
+from routes import recommendations # noqa: E402,F401  /recommendations, /admin/recommendations/* (Phase 3 — mentor Recommendation + News system)
 from routes import analytics       # noqa: E402,F401  (Phase 3 — currently empty, see file docstring)
 from routes import notifications   # noqa: E402,F401  (Phase 3 — currently empty, see file docstring)
 from routes import api             # noqa: E402,F401  (Phase 3 — currently empty, see file docstring)
@@ -86,11 +104,7 @@ def e429(e):
 
 
 if __name__ == "__main__":
-    from database.db import ensure_db_columns
     from workers.sync_worker import start_sync_worker
-
-    ensure_db_columns()
-    ensure_tracker_schema()
 
     if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         start_sync_worker()

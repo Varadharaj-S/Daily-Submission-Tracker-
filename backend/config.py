@@ -67,3 +67,14 @@ class Config:
         "BACKUP_DIR",
         "/tmp/backups" if os.environ.get("VERCEL") else "backups",
     )
+
+    # In-process contest-sync loop cadence (services/scheduler_service.py's
+    # run_contest_scheduler()) — safety net for deployments that don't run
+    # contest_scheduler.py via Render Cron. Docstring there specifies a
+    # 5-minute cadence; this constant was missing entirely, which crashed
+    # the app at import time (workers/sync_worker.py -> scheduler_service.py
+    # -> Config.CONTEST_SYNC_INTERVAL_MINUTES) before any route could load.
+    CONTEST_SYNC_INTERVAL_MINUTES = int(os.environ.get("CONTEST_SYNC_INTERVAL_MINUTES", "5"))
+
+    # In-process per-user daily auto-sync loop (services/scheduler_service.py).
+    AUTO_SYNC_INTERVAL_HOURS = int(os.environ.get("AUTO_SYNC_INTERVAL_HOURS", "24"))
