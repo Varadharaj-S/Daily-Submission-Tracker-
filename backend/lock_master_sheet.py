@@ -45,8 +45,9 @@ import json
 import gspread
 from google.oauth2.service_account import Credentials
 
-from normal_sync import CREDENTIALS_FILE, SHEET_ID
+from normal_sync import CREDENTIALS_FILE
 from services.mentor_sheet_sync import MENTOR_SHEET_TAB
+from services.year_sheet_service import get_sheet_id_for_year
 from sheet_protect import get_service_account_email
 
 
@@ -63,16 +64,23 @@ def _client():
     return gspread.authorize(creds)
 
 
-def main(admin_email):
+def main(admin_email, year):
     if "@" not in admin_email:
         print(f"'{admin_email}' doesn't look like an email address — aborting.")
         return
 
+    sheet_id = get_sheet_id_for_year(year)
+    if not sheet_id:
+        print(f"No Google Sheet is configured for year '{year}' yet — set one up first "
+              f"(mentor dashboard, or POST /admin/year_sheets).")
+        return
+
     gc = _client()
-    ss = gc.open_by_key(SHEET_ID)
+    ss = gc.open_by_key(sheet_id)
     service_email = get_service_account_email(CREDENTIALS_FILE)
 
-    print(f"\nSpreadsheet: {ss.title}")
+    print(f"\nYear: {year}")
+    print(f"Spreadsheet: {ss.title}")
     print(f"Service account: {service_email or '(not found)'}\n")
 
     print("Current access list:")
@@ -93,7 +101,7 @@ def main(admin_email):
         if p.get("type") == "anyone":
             try:
                 ss.client.session.delete(
-                    f"https://www.googleapis.com/drive/v3/files/{SHEET_ID}/permissions/{p['id']}"
+                    f"https://www.googleapis.com/drive/v3/files/{sheet_id}/permissions/{p['id']}"
                 )
                 print("Removed 'anyone with the link' access.")
             except Exception as e:
@@ -132,7 +140,8 @@ def main(admin_email):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python lock_master_sheet.py you@gmail.com")
+    if len(sys.argv) != 3:
+        print("Usage: python lock_master_sheet.py you@gmail.com <year>")
+        print("  e.g. python lock_master_sheet.py mentor@gmail.com 2028")
         sys.exit(1)
-    main(sys.argv[1])
+    main(sys.argv[1], sys.argv[2])

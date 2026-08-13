@@ -22,6 +22,25 @@ from services.sync_engine import sync_user_data
 from workers.backup_worker import run_backup, run_restore, list_backups
 from normal_sync import rebuild_user_sheet_from_db, backfill_missing_rows_from_db
 from services.mentor_sheet_sync import sync_assignment_to_sheet, resync_all as sheet_resync_all, remove_regn_num_column
+from services.year_sheet_service import list_configured_years, is_year_configured, list_year_sheets, set_sheet_id_for_year, delete_year_sheet
+
+
+def _require_mentor_year():
+    """PHASE 2: every mentor endpoint that touches students/sheets is
+    scoped to ONE year at a time (mentor picks it in the UI — a mentor
+    is allowed to manage every year, but still has to say which one for
+    a given request, same as picking a tab). Reads `year` from query
+    string or form/json body, validates it's an actually-configured
+    year (catches typos before they create a stray sheet), and returns
+    (year, None) or (None, error_response)."""
+    body = request.get_json(silent=True) or {}
+    year = request.values.get("year") or body.get("year")
+    year = sanitize(str(year or ""), 16)
+    if not year:
+        return None, (jsonify({"success": False, "message": "Select a year first."}), 400)
+    if not is_year_configured(year):
+        return None, (jsonify({"success": False, "message": f"Year '{year}' has no Google Sheet configured yet. Set one up first."}), 400)
+    return year, None
 
 
 # ── Admin Dashboard ────────────────────────────────────────────────────────────
@@ -270,6 +289,10 @@ def _assign_one(db, admin_id, user_id, pname, purl, diff, plat, topic, note, due
 @login_required
 @admin_required
 def mentor():
+    year, err = _require_mentor_year()
+    if err:
+        return err
+
     if request.method == "POST":
         assign_all = request.form.get("assign_all", "0") == "1"
         uid_raw    = request.form.get("user_id", "0")
@@ -287,9 +310,10 @@ def mentor():
 
         with get_db() as db:
             if assign_all:
-                # Assign to ALL active non-admin students
+                # Assign to ALL active non-admin students IN THIS YEAR ONLY
                 students = db.execute(
-                    "SELECT id, reg_no, full_name FROM users WHERE status='active' AND is_admin=0"
+                    "SELECT id, reg_no, full_name FROM users WHERE status='active' AND is_admin=0 AND cohort_year=?",
+                    (year,)
                 ).fetchall()
                 created = dupes = solved = 0
                 sheet_rows = []
@@ -306,8 +330,8 @@ def mentor():
                         })
                 db.commit()
                 if sheet_rows:
-                    run_background(sync_assignment_to_sheet, pname, purl, due, sheet_rows, get_db)
-                msg = f"Assigned to {created} student(s)."
+                    run_background(sync_assignment_to_sheet, pname, purl, due, sheet_rows, get_db, year)
+                msg = f"Assigned to {created} student(s) in {year}."
                 if dupes:   msg += f" {dupes} already assigned (skipped)."
                 if solved:  msg += f" {solved} already solved (marked Completed)."
                 return jsonify({"success": True, "message": msg})
@@ -319,13 +343,13 @@ def mentor():
                 if uid <= 0:
                     return jsonify({"success": False, "message": "Select a student."}), 400
 
-                # Ownership check: student must be active and not admin
+                # Ownership check: student must be active, not admin, AND in this year
                 student = db.execute(
-                    "SELECT id, reg_no, full_name FROM users WHERE id=%s AND status='active' AND is_admin=0",
-                    (uid,)
+                    "SELECT id, reg_no, full_name FROM users WHERE id=%s AND status='active' AND is_admin=0 AND cohort_year=%s",
+                    (uid, year)
                 ).fetchone()
                 if not student:
-                    return jsonify({"success": False, "message": "Student not found or not eligible."}), 404
+                    return jsonify({"success": False, "message": f"Student not found in {year}, or not eligible."}), 404
 
                 result = _assign_one(db, current_user.id, uid,
                                       pname, purl, diff, plat, topic, note, due, today)
@@ -336,7 +360,7 @@ def mentor():
                 run_background(sync_assignment_to_sheet, pname, purl, due, [{
                     "reg_no": student["reg_no"], "full_name": student["full_name"],
                     "completed": result == "already_solved"
-                }], get_db)
+                }], get_db, year)
 
                 if result == "already_solved":
                     return jsonify({"success": True, "message": "Problem assigned and marked Completed (student already solved it)."})
@@ -344,21 +368,23 @@ def mentor():
 
     with get_db() as db:
         users = db.execute(
-            "SELECT id,username FROM users WHERE status='active' AND is_admin=0"
+            "SELECT id,username FROM users WHERE status='active' AND is_admin=0 AND cohort_year=?",
+            (year,)
         ).fetchall()
+        user_ids = [u["id"] for u in users] or [-1]
         assignments = db.execute("""
             SELECT ma.*,u.username
             FROM mentor_assignments ma
             JOIN users u ON ma.user_id=u.id
-            WHERE ma.admin_id=%s
+            WHERE ma.admin_id=%s AND ma.user_id = ANY(%s)
             ORDER BY ma.assigned_date DESC LIMIT 100
-        """, (current_user.id,)).fetchall()
+        """, (current_user.id, user_ids)).fetchall()
         custom_probs = db.execute(
             "SELECT * FROM custom_problems ORDER BY created_at DESC"
         ).fetchall()
 
         # Auto-refresh completed status for all this mentor's assignments
-        # so the view is always in sync with actual submissions
+        # (in this year) so the view is always in sync with actual submissions
         for a in assignments:
             if not a["completed"]:
                 solved = _is_solved_by_student(db, a["user_id"], a["problem_url"], a["problem_name"])
@@ -374,11 +400,11 @@ def mentor():
             SELECT ma.*,u.username
             FROM mentor_assignments ma
             JOIN users u ON ma.user_id=u.id
-            WHERE ma.admin_id=%s
+            WHERE ma.admin_id=%s AND ma.user_id = ANY(%s)
             ORDER BY ma.assigned_date DESC LIMIT 100
-        """, (current_user.id,)).fetchall()
+        """, (current_user.id, user_ids)).fetchall()
 
-        # Build user_progress: total assigned vs completed per user (mentor-scoped)
+        # Build user_progress: total assigned vs completed per user (mentor-scoped, this year)
         user_progress = {}
         for u in users:
             uid = u["id"]
@@ -399,6 +425,8 @@ def mentor():
             }
 
     return jsonify({
+        "year": year,
+        "years": list_configured_years(),
         "users": rows_to_dicts(users),
         "assignments": rows_to_dicts(assignments),
         "custom_probs": rows_to_dicts(custom_probs),
@@ -410,9 +438,12 @@ def mentor():
 @login_required
 @admin_required
 def mentor_remove_regn_column():
-    """One-click cleanup: deletes the old 'Regn Num' column from the
-    roster sheet if it's still there. Safe to click more than once."""
-    result = remove_regn_num_column(get_db)
+    """One-click cleanup: deletes the old 'Regn Num' column from that
+    year's roster sheet if it's still there. Safe to click more than once."""
+    year, err = _require_mentor_year()
+    if err:
+        return err
+    result = remove_regn_num_column(get_db, year)
     return jsonify(result)
 
 
@@ -421,14 +452,19 @@ def mentor_remove_regn_column():
 @admin_required
 def mentor_refresh_status():
     """
-    Re-check all pending assignments for this mentor against actual submissions
-    and mark them completed if already solved.
+    Re-check all pending assignments for this mentor, IN THIS YEAR,
+    against actual submissions and mark them completed if already solved.
     """
+    year, err = _require_mentor_year()
+    if err:
+        return err
     with get_db() as db:
-        pending = db.execute(
-            "SELECT id,user_id,problem_url,problem_name FROM mentor_assignments WHERE admin_id=%s AND completed=0",
-            (current_user.id,)
-        ).fetchall()
+        pending = db.execute("""
+            SELECT ma.id, ma.user_id, ma.problem_url, ma.problem_name
+            FROM mentor_assignments ma
+            JOIN users u ON u.id = ma.user_id
+            WHERE ma.admin_id=%s AND ma.completed=0 AND u.cohort_year=%s
+        """, (current_user.id, year)).fetchall()
         updated = 0
         for a in pending:
             if _is_solved_by_student(db, a["user_id"], a["problem_url"], a["problem_name"]):
@@ -436,7 +472,7 @@ def mentor_refresh_status():
                 updated += 1
         db.commit()
 
-    sheet_summary = sheet_resync_all(get_db)
+    sheet_summary = sheet_resync_all(get_db, year)
     msg = f"{updated} assignment(s) updated to Completed."
     if sheet_summary.get("skipped"):
         msg += " (Sheet sync skipped — check MENTOR_SHEET_TAB / sheet access.)"
@@ -481,13 +517,13 @@ def mentor_approve_all():
 @admin_required
 def mentor_search_problem():
     """
-    Search across the WHOLE database (every student, not just this mentor's
-    own assignments) for a given problem, and report per-student whether it
-    has been solved. Powers the "Search Problem" tab in Mentor Mode — the
-    result mirrors what a sheet with columns
-    Student Name | Register Number | Problem Name | Problem Link | Solved
-    would look like, one row per student in the database.
+    Search across every student IN THIS YEAR for a given problem, and
+    report per-student whether it has been solved. Powers the "Search
+    Problem" tab in Mentor Mode.
     """
+    year, err = _require_mentor_year()
+    if err:
+        return err
     pname = sanitize(request.args.get("problem_name", ""), 200)
     purl  = sanitize(request.args.get("problem_url", ""), 300)
 
@@ -502,9 +538,9 @@ def mentor_search_problem():
         students = db.execute("""
             SELECT id, username, full_name, reg_no
             FROM users
-            WHERE is_admin=0
+            WHERE is_admin=0 AND cohort_year=?
             ORDER BY username ASC
-        """).fetchall()
+        """, (year,)).fetchall()
 
         results = []
         solved_count = 0
@@ -524,11 +560,12 @@ def mentor_search_problem():
             })
             sheet_rows.append({"reg_no": s["reg_no"], "full_name": s["full_name"], "completed": solved})
 
-    # Best-effort: mirror this exact search into the roster sheet too, so a
-    # searched problem shows up as a column there the same way an assigned
-    # one does — this doesn't touch mentor_assignments, it's read-only from
-    # the DB's point of view, just a sheet mirror of what was searched.
-    run_background(sync_assignment_to_sheet, pname, purl, "", sheet_rows, get_db)
+    # Best-effort: mirror this exact search into that year's roster sheet
+    # too, so a searched problem shows up as a column there the same way
+    # an assigned one does — this doesn't touch mentor_assignments, it's
+    # read-only from the DB's point of view, just a sheet mirror of what
+    # was searched.
+    run_background(sync_assignment_to_sheet, pname, purl, "", sheet_rows, get_db, year)
 
     return jsonify({
         "success": True,
@@ -641,11 +678,13 @@ def admin_sync_all():
 @admin_required
 def admin_restore_sheet(uid):
     with get_db() as db:
-        u = db.execute("SELECT username FROM users WHERE id=%s", (uid,)).fetchone()
+        u = db.execute("SELECT username, cohort_year FROM users WHERE id=%s", (uid,)).fetchone()
     if not u:
         return jsonify({"ok": False, "message": "User not found"}), 404
+    if not u["cohort_year"]:
+        return jsonify({"ok": False, "message": f"{u['username']} has no year/cohort assigned yet — assign one first."}), 400
     try:
-        count = backfill_missing_rows_from_db(uid, u["username"], get_db)
+        count = backfill_missing_rows_from_db(uid, u["username"], get_db, u["cohort_year"])
         log_admin("restore_sheet", u["username"], f"{count} rows backfilled")
         return jsonify({"ok": True, "message": f"Backfilled {count} missing rows for {u['username']}"})
     except Exception as e:
@@ -660,11 +699,13 @@ def admin_restore_sheet(uid):
 @admin_required
 def admin_rebuild_sheet(uid):
     with get_db() as db:
-        u = db.execute("SELECT username FROM users WHERE id=%s", (uid,)).fetchone()
+        u = db.execute("SELECT username, cohort_year FROM users WHERE id=%s", (uid,)).fetchone()
     if not u:
         return jsonify({"ok": False, "message": "User not found"}), 404
+    if not u["cohort_year"]:
+        return jsonify({"ok": False, "message": f"{u['username']} has no year/cohort assigned yet — assign one first."}), 400
     try:
-        count = rebuild_user_sheet_from_db(uid, u["username"], get_db)
+        count = rebuild_user_sheet_from_db(uid, u["username"], get_db, u["cohort_year"])
         log_admin("rebuild_sheet", u["username"], f"{count} rows rebuilt")
         return jsonify({"ok": True, "message": f"Rebuilt {count} rows for {u['username']} in date order"})
     except Exception as e:
@@ -678,11 +719,14 @@ def admin_restore_all_sheets():
     def _do():
         with get_db() as db:
             users = db.execute(
-                "SELECT id, username FROM users WHERE status='active'"
+                "SELECT id, username, cohort_year FROM users WHERE status='active'"
             ).fetchall()
         for u in users:
+            if not u["cohort_year"]:
+                print(f"[RestoreAll] {u['username']}: skipped, no cohort_year assigned")
+                continue
             try:
-                count = backfill_missing_rows_from_db(u["id"], u["username"], get_db)
+                count = backfill_missing_rows_from_db(u["id"], u["username"], get_db, u["cohort_year"])
                 print(f"[RestoreAll] {u['username']}: {count} rows backfilled")
             except Exception as e:
                 print(f"[RestoreAll] {u['username']}: {e}")
@@ -728,15 +772,26 @@ def admin_backups_list():
 @login_required
 @admin_required
 def admin_students():
+    year = sanitize(request.args.get("year", ""), 16)
     with get_db() as db:
-        users = db.execute("""
-            SELECT id, username, email, full_name, reg_no, roll_no, branch, status
-            FROM users
-            WHERE is_admin=0
-            ORDER BY (reg_no IS NULL OR reg_no = '') DESC, username ASC
-        """).fetchall()
+        if year:
+            users = db.execute("""
+                SELECT id, username, email, full_name, reg_no, roll_no, branch, status, cohort_year
+                FROM users
+                WHERE is_admin=0 AND cohort_year=?
+                ORDER BY (reg_no IS NULL OR reg_no = '') DESC, username ASC
+            """, (year,)).fetchall()
+        else:
+            users = db.execute("""
+                SELECT id, username, email, full_name, reg_no, roll_no, branch, status, cohort_year
+                FROM users
+                WHERE is_admin=0
+                ORDER BY (reg_no IS NULL OR reg_no = '') DESC, username ASC
+            """).fetchall()
     missing_count = sum(1 for u in users if not u["reg_no"])
-    return jsonify({"users": rows_to_dicts(users), "missing_count": missing_count})
+    unassigned_year_count = sum(1 for u in users if not u["cohort_year"])
+    return jsonify({"users": rows_to_dicts(users), "missing_count": missing_count,
+                    "unassigned_year_count": unassigned_year_count})
 
 
 @app.route("/admin/students/update/<int:uid>", methods=["POST"])
@@ -747,6 +802,10 @@ def admin_students_update(uid):
     reg_no = sanitize(request.form.get("reg_no", ""), 40)
     roll_no = sanitize(request.form.get("roll_no", ""), 40)
     branch = sanitize(request.form.get("branch", ""), 40)
+    # cohort_year is optional here — omit the field entirely to leave it
+    # unchanged; pass "" explicitly to clear it back to unassigned.
+    cohort_year_provided = "cohort_year" in request.form
+    cohort_year = sanitize(request.form.get("cohort_year", ""), 16)
 
     with get_db() as db:
         if reg_no:
@@ -757,10 +816,56 @@ def admin_students_update(uid):
             if clash:
                 return jsonify({"success": False, "message": f"Reg No '{reg_no}' is already used by {clash['username']}."}), 409
 
-        db.execute("""
-            UPDATE users SET full_name=?, reg_no=?, roll_no=?, branch=? WHERE id=?
-        """, (full_name, reg_no, roll_no, branch, uid))
+        if cohort_year_provided and cohort_year and not is_year_configured(cohort_year):
+            return jsonify({"success": False, "message": f"Year '{cohort_year}' has no Google Sheet configured yet."}), 400
+
+        if cohort_year_provided:
+            db.execute("""
+                UPDATE users SET full_name=?, reg_no=?, roll_no=?, branch=?, cohort_year=? WHERE id=?
+            """, (full_name, reg_no, roll_no, branch, cohort_year or None, uid))
+        else:
+            db.execute("""
+                UPDATE users SET full_name=?, reg_no=?, roll_no=?, branch=? WHERE id=?
+            """, (full_name, reg_no, roll_no, branch, uid))
         db.commit()
 
     log_admin("update_student_fields", details=f"uid={uid}")
     return jsonify({"success": True, "message": "Student details updated."})
+
+
+# ── PHASE 2: Year <-> Google Sheet mapping (mentor-managed) ──────────────────
+@app.route("/admin/year_sheets", methods=["GET"])
+@login_required
+@admin_required
+def admin_year_sheets_list():
+    """List every configured year -> spreadsheet mapping, for the mentor
+    dashboard's year picker / settings panel."""
+    return jsonify({"success": True, "year_sheets": list_year_sheets()})
+
+
+@app.route("/admin/year_sheets", methods=["POST"])
+@login_required
+@admin_required
+def admin_year_sheets_set():
+    """Create or update the spreadsheet ID for a year. Adding a new year
+    is just calling this once — no code changes, no new tables."""
+    body = request.get_json(silent=True) or {}
+    year = sanitize(request.form.get("year", "") or body.get("year", ""), 16)
+    spreadsheet_id = sanitize(request.form.get("spreadsheet_id", "") or body.get("spreadsheet_id", ""), 200)
+    if not year or not spreadsheet_id:
+        return jsonify({"success": False, "message": "year and spreadsheet_id are both required."}), 400
+    try:
+        set_sheet_id_for_year(year, spreadsheet_id)
+        log_admin("set_year_sheet", details=f"{year} -> {spreadsheet_id}")
+        return jsonify({"success": True, "message": f"Year '{year}' now maps to that spreadsheet."})
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+
+
+@app.route("/admin/year_sheets/<year>", methods=["DELETE"])
+@login_required
+@admin_required
+def admin_year_sheets_delete(year):
+    delete_year_sheet(sanitize(year, 16))
+    log_admin("delete_year_sheet", details=year)
+    return jsonify({"success": True, "message": f"Removed the sheet mapping for '{year}'."})

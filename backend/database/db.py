@@ -251,15 +251,19 @@ def init_db():
             used       INTEGER DEFAULT 0
         );
         """)
-        # Default admin
-        if not db.execute("SELECT id FROM users WHERE username='admin'").fetchone():
+        # Default admin — password comes from ADMIN_INIT_PASSWORD (set this
+        # in your environment / Render dashboard before first deploy). No
+        # hardcoded fallback: if it's not set, no default admin is created
+        # and you create one yourself via database/seed.py or the DB directly.
+        admin_password = os.environ.get("ADMIN_INIT_PASSWORD")
+        if admin_password and not db.execute("SELECT id FROM users WHERE username='admin'").fetchone():
             db.execute("""
                 INSERT INTO users
                 (username,email,password,is_admin,is_verified,status,
                  enabled_platforms,created_at)
                 VALUES (?,?,?,1,1,'active',?,?)
             """, ("admin", "admin@dsatracker.local",
-                  generate_password_hash("admin123"),
+                  generate_password_hash(admin_password),
                   '["Codeforces","LeetCode","AtCoder"]',
                   datetime.now().isoformat()))
         db.commit()
@@ -283,6 +287,43 @@ def ensure_extension_schema():
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_extension_token "
                 "ON users(extension_token) WHERE extension_token IS NOT NULL"
             )
+        except Exception:
+            pass
+        db.commit()
+
+
+def ensure_year_schema():
+    """
+    PHASE 2 — year-wise architecture. Adds:
+      * users.cohort_year (TEXT, nullable — NULL means "not yet
+        assigned a year"; existing pre-Phase-2 students stay NULL
+        rather than being silently guessed into a year/sheet)
+      * year_sheets: the single source of truth mapping a year/cohort
+        to the Google Spreadsheet ID that holds that year's students.
+        Configured by the mentor via /admin/year_sheets. Nothing else
+        in the app should hardcode a spreadsheet ID or read this table
+        directly — always go through services/year_sheet_service.py.
+    Called unconditionally at import time (same reasoning as
+    ensure_extension_schema() above: this also has to run on Vercel,
+    which never executes the `python app.py` __main__ block).
+    """
+    with get_db() as db:
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS cohort_year TEXT")
+        except Exception:
+            pass
+        try:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS year_sheets (
+                    year           TEXT PRIMARY KEY,
+                    spreadsheet_id TEXT NOT NULL,
+                    updated_at     TEXT
+                )
+            """)
+        except Exception:
+            pass
+        try:
+            db.execute("CREATE INDEX IF NOT EXISTS idx_users_cohort_year ON users(cohort_year)")
         except Exception:
             pass
         db.commit()

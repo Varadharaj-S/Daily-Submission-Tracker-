@@ -22,7 +22,7 @@ the assembly point:
 import os
 
 from extensions import app
-from database.db import init_db, ensure_extension_schema
+from database.db import init_db, ensure_extension_schema, ensure_year_schema
 from services.tracker_service import ensure_tracker_schema
 from contest.contest_service import ensure_contest_schema
 
@@ -34,6 +34,10 @@ init_db()
 # unconditionally (like ensure_contest_schema() below) so it also happens on
 # Vercel cold starts, not just under `python app.py`'s __main__ block.
 ensure_extension_schema()
+
+# PHASE 2 — users.cohort_year + year_sheets mapping table. Same
+# unconditional-on-cold-start reasoning as ensure_extension_schema().
+ensure_year_schema()
 
 # contest_events/contest_results/contest_problems are NOT part of init_db()'s
 # baseline schema — they were added later via database/migrate.py, a

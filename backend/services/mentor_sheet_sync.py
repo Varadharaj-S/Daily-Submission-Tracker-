@@ -53,7 +53,7 @@ import threading
 import gspread
 from google.oauth2.service_account import Credentials
 
-from normal_sync import CREDENTIALS_FILE, SHEET_ID
+from normal_sync import CREDENTIALS_FILE
 
 # ── Config (env-overridable) ────────────────────────────────────────────────
 MENTOR_SHEET_TAB = os.environ.get("MENTOR_SHEET_TAB", "SkillRack Sir Class Track")
@@ -88,17 +88,18 @@ def _client():
 ROSTER_BASE_HEADERS = ["Reg No", "Name", "Branch"]  # Regn Num column removed — Reg No is the key column; no summary "Solved" column — each problem column carries its own status
 
 
-def _import_students_into_new_roster(ws, get_db):
+def _import_students_into_new_roster(ws, get_db, year):
     """Fills the freshly-created roster tab with one row per active,
-    non-admin student (Reg No / Name / Branch), same 'first fill details'
-    step contest_sheet.py's import_students() does for the contest tab.
-    Returns the number of rows written."""
+    non-admin student IN THIS YEAR ONLY (Reg No / Name / Branch), same
+    'first fill details' step contest_sheet.py's import_students() does
+    for the contest tab. Returns the number of rows written."""
     if get_db is None:
         return 0
     with get_db() as db:
         students = db.execute(
             "SELECT reg_no, full_name, branch FROM users "
-            "WHERE status='active' AND is_admin=0 ORDER BY full_name ASC"
+            "WHERE status='active' AND is_admin=0 AND cohort_year=? ORDER BY full_name ASC",
+            (str(year),)
         ).fetchall()
     rows = [[s["reg_no"] or "", s["full_name"] or "", s["branch"] or ""] for s in students]
     if rows:
@@ -106,17 +107,22 @@ def _import_students_into_new_roster(ws, get_db):
     return len(rows)
 
 
-def get_or_create_roster_ws(get_db=None):
-    """Open the shared spreadsheet and return the roster worksheet,
-    creating it (as a new tab in the SAME spreadsheet, matching how
-    contest_sheet.py's get_or_create_student_contest_sheet() works) the
-    first time a problem is ever assigned. On creation: writes the header
-    row at HEADER_ROW and immediately fills in every active student's Reg
-    No / Name / Branch — details go in first, problem columns get added
-    on top of that by _find_or_create_problem_column(), same additive-only
-    pattern as the contest tab's per-contest columns."""
-    gc = _client()
-    ss = gc.open_by_key(SHEET_ID)
+def get_or_create_roster_ws(get_db=None, year=None):
+    """Open THIS YEAR'S spreadsheet (PHASE 2: resolved via
+    services/year_sheet_service.py — no more single shared SHEET_ID)
+    and return the roster worksheet, creating it (as a new tab) the
+    first time a problem is ever assigned for that year. On creation:
+    writes the header row at HEADER_ROW and immediately fills in every
+    active student IN THAT YEAR's Reg No / Name / Branch — details go
+    in first, problem columns get added on top of that by
+    _find_or_create_problem_column(), same additive-only pattern as
+    the contest tab's per-contest columns.
+    `year` must already be a trusted/validated value — see
+    services/year_sheet_service.py's module docstring."""
+    if not year:
+        raise ValueError("year is required to resolve which year's roster sheet to use")
+    from services.year_sheet_service import open_year_spreadsheet
+    ss = open_year_spreadsheet(year)
     try:
         return ss.worksheet(MENTOR_SHEET_TAB)
     except gspread.exceptions.WorksheetNotFound:
@@ -124,14 +130,14 @@ def get_or_create_roster_ws(get_db=None):
         if HEADER_ROW > 1:
             ws.update_cell(1, 1, "Mentor Assigned Problems")  # banner row, mirrors the manual sheet's layout
         ws.update(f"A{HEADER_ROW}", [ROSTER_BASE_HEADERS], value_input_option="USER_ENTERED")
-        _import_students_into_new_roster(ws, get_db)
+        _import_students_into_new_roster(ws, get_db, year)
         return ws
 
 
-def _get_roster_ws(get_db=None):
+def _get_roster_ws(get_db=None, year=None):
     """Back-compat wrapper — now always gets-or-creates instead of
     returning None, so a missing tab no longer silently skips the sync."""
-    return get_or_create_roster_ws(get_db)
+    return get_or_create_roster_ws(get_db, year)
 
 
 def _col_letter(col_idx):
@@ -357,7 +363,7 @@ def _apply_conditional_colors(ws, col_idx):
     ws.spreadsheet.batch_update(requests_body)
 
 
-def remove_regn_num_column(get_db=None):
+def remove_regn_num_column(get_db=None, year=None):
     """
     One-off migration for sheets created before the Regn Num column was
     dropped from ROSTER_BASE_HEADERS: finds a "Regn Num" (or "Register
@@ -366,10 +372,11 @@ def remove_regn_num_column(get_db=None):
     the column is gone. Everything else (problem columns, Reg No
     matching) is found by header text, not position, so this doesn't
     disturb anything to the right of the deleted column.
+    `year` (PHASE 2, required): which year's roster sheet to clean up.
     """
     with _lock:
         try:
-            ws = get_or_create_roster_ws(get_db)
+            ws = get_or_create_roster_ws(get_db, year)
             headers = _header_row_values(ws)
             for i, h in enumerate(headers, start=1):
                 # Only ever matches "Regn Num" / "Regn. Num" / "Register Num(ber)" —
@@ -383,9 +390,12 @@ def remove_regn_num_column(get_db=None):
             return {"success": False, "error": str(e)}
 
 
-def sync_assignment_to_sheet(problem_name, problem_url, due_date, students, get_db=None):
+def sync_assignment_to_sheet(problem_name, problem_url, due_date, students, get_db=None, year=None):
     """
-    students: list of dicts, each with reg_no, full_name, completed (bool).
+    students: list of dicts, each with reg_no, full_name, completed (bool) —
+    ALL belonging to `year` (the caller must have already filtered them,
+    since this only opens that one year's roster sheet).
+    year (PHASE 2, required): which year's spreadsheet to write into.
     get_db: optional — passed through so a first-ever assignment can
     create the roster tab and immediately fill it with every student's
     details (see get_or_create_roster_ws()). If omitted and the tab
@@ -397,7 +407,7 @@ def sync_assignment_to_sheet(problem_name, problem_url, due_date, students, get_
     """
     with _lock:
         try:
-            ws = get_or_create_roster_ws(get_db)
+            ws = get_or_create_roster_ws(get_db, year)
             repair_duplicate_problem_columns(ws)
 
             headers = _header_row_values(ws)
@@ -424,28 +434,34 @@ def sync_assignment_to_sheet(problem_name, problem_url, due_date, students, get_
             return False
 
 
-def resync_all(get_db):
+def resync_all(get_db, year):
     """
-    Full resync: for every mentor_assignment in the DB, make sure its
-    column exists and every cell reflects current `completed` status.
-    Also appends a roster row for any active, non-admin student missing
-    from the sheet (new-user support).
+    Full resync for ONE year: for every mentor_assignment belonging to a
+    student in this year, make sure its column exists and every cell
+    reflects current `completed` status. Also appends a roster row for
+    any active student IN THIS YEAR who isn't in the sheet yet.
     Returns a summary dict for the caller to show in the UI.
+    year (PHASE 2, required): which year to resync.
     """
     with _lock:
         summary = {"columns_touched": 0, "cells_updated": 0, "rows_added": 0, "skipped": False}
+        if not year:
+            summary["skipped"] = True
+            summary["error"] = "year is required"
+            return summary
         try:
-            ws = get_or_create_roster_ws(get_db)
+            ws = get_or_create_roster_ws(get_db, year)
             summary["duplicate_columns_merged"] = repair_duplicate_problem_columns(ws)
 
             headers = _header_row_values(ws)
             row_index, key_col, mode = _build_row_index(ws, headers)
 
             with get_db() as db:
-                # 1) Add missing students as new rows.
+                # 1) Add missing students (THIS YEAR ONLY) as new rows.
                 students = db.execute(
                     "SELECT id, username, full_name, reg_no, branch FROM users "
-                    "WHERE status='active' AND is_admin=0"
+                    "WHERE status='active' AND is_admin=0 AND cohort_year=?",
+                    (str(year),)
                 ).fetchall()
                 for s in students:
                     key = s["reg_no"] if mode == "reg_no" else (s["full_name"] or "").lower()
@@ -460,11 +476,13 @@ def resync_all(get_db):
                 if summary["rows_added"]:
                     row_index, key_col, mode = _build_row_index(ws, _header_row_values(ws))
 
-                # 2) Walk every distinct assigned problem and sync its column.
+                # 2) Walk every distinct problem assigned to a student IN THIS YEAR and sync its column.
                 problems = db.execute("""
-                    SELECT DISTINCT problem_name, problem_url, due_date
-                    FROM mentor_assignments
-                """).fetchall()
+                    SELECT DISTINCT ma.problem_name, ma.problem_url, ma.due_date
+                    FROM mentor_assignments ma
+                    JOIN users u ON u.id = ma.user_id
+                    WHERE u.cohort_year = ?
+                """, (str(year),)).fetchall()
 
                 for p in problems:
                     col = _find_or_create_problem_column(ws, p["problem_name"], p["problem_url"], p["due_date"])
@@ -474,9 +492,10 @@ def resync_all(get_db):
                         SELECT ma.completed, u.reg_no, u.full_name
                         FROM mentor_assignments ma
                         JOIN users u ON u.id = ma.user_id
-                        WHERE (ma.problem_url=%s AND %s <> '')
-                           OR (%s = '' AND LOWER(ma.problem_name)=LOWER(%s))
-                    """, (p["problem_url"], p["problem_url"] or "", p["problem_url"] or "", p["problem_name"])
+                        WHERE u.cohort_year = %s
+                          AND ((ma.problem_url=%s AND %s <> '')
+                           OR (%s = '' AND LOWER(ma.problem_name)=LOWER(%s)))
+                    """, (str(year), p["problem_url"], p["problem_url"] or "", p["problem_url"] or "", p["problem_name"])
                     ).fetchall()
 
                     updates = []

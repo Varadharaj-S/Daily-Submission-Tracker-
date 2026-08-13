@@ -30,6 +30,7 @@ from database.db import get_db, IntegrityError
 from utils.security import sanitize, rate_limit
 from services.auth_service import User
 from services.email_service import send_verification_email
+from services.year_sheet_service import list_configured_years, is_year_configured
 
 
 def _frontend_url(path):
@@ -114,7 +115,10 @@ def login():
 @rate_limit(max_calls=5, window=300)
 def signup():
     if request.method == "GET":
-        return jsonify({"ok": True})
+        # PHASE 2: the signup form needs the list of years a mentor has
+        # actually configured a sheet for, so it can offer a dropdown
+        # instead of a free-text field a student could typo.
+        return jsonify({"ok": True, "years": list_configured_years()})
 
     body = request.form if not request.is_json else (request.json or {})
     username = sanitize(body.get("username", ""), 32)
@@ -125,6 +129,7 @@ def signup():
     reg_no = sanitize(body.get("reg_no", ""), 40)
     roll_no = sanitize(body.get("roll_no", ""), 40)
     branch = sanitize(body.get("branch", ""), 40)
+    cohort_year = sanitize(body.get("cohort_year", "") or body.get("year", ""), 16)
 
     if not username or len(username) < 3:
         return jsonify({"success": False, "message": "Username must be at least 3 characters."}), 400
@@ -136,6 +141,12 @@ def signup():
         return jsonify({"success": False, "message": "Register number is required."}), 400
     if not branch:
         return jsonify({"success": False, "message": "Branch is required."}), 400
+    if not cohort_year:
+        return jsonify({"success": False, "message": "Year/Cohort is required."}), 400
+    # Backend validation, never trust the client value alone: the year
+    # must be one a mentor has actually configured a sheet for.
+    if not is_year_configured(cohort_year):
+        return jsonify({"success": False, "message": f"'{cohort_year}' isn't an available year yet. Contact your mentor."}), 400
     if password != confirm:
         return jsonify({"success": False, "message": "Passwords do not match."}), 400
     if len(password) < 6:
@@ -152,12 +163,12 @@ def signup():
             db.execute("""
                 INSERT INTO users
                 (username,email,password,is_verified,status,
-                 enabled_platforms,created_at,full_name,reg_no,roll_no,branch)
-                VALUES (?,?,?,0,'pending',?,?,?,?,?,?)
+                 enabled_platforms,created_at,full_name,reg_no,roll_no,branch,cohort_year)
+                VALUES (?,?,?,0,'pending',?,?,?,?,?,?,?)
             """, (username, email, generate_password_hash(password),
                   '["Codeforces","LeetCode","AtCoder"]',
                   datetime.now().isoformat(),
-                  full_name, reg_no, roll_no, branch))
+                  full_name, reg_no, roll_no, branch, cohort_year))
             db.commit()
             user_row = db.execute(
                 "SELECT id FROM users WHERE username=?", (username,)

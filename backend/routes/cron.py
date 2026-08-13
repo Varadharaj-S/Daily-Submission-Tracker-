@@ -40,3 +40,22 @@ def cron_daily_sync():
     run_daily_sync()
 
     return jsonify({"ok": True, "message": "Daily sync completed"})
+
+
+@app.route("/api/cron/contest-sync", methods=["GET", "POST"])
+def cron_contest_sync():
+    """vercel.json's crons[] entry for '/api/cron/contest-sync' had no
+    matching route — on Vercel that cron 404'd every tick and no contest
+    was ever auto-synced there. Same pattern as cron_daily_sync() above:
+    just calls the one real implementation (contest_scheduler.main(),
+    which itself calls contest.contest_sync.run_due_contests())."""
+    secret = os.environ.get("CRON_SECRET", "")
+    if secret:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header != f"Bearer {secret}":
+            return jsonify({"ok": False, "message": "Unauthorized"}), 401
+
+    from contest_scheduler import main as run_contest_sync
+    run_contest_sync()
+
+    return jsonify({"ok": True, "message": "Contest sync completed"})

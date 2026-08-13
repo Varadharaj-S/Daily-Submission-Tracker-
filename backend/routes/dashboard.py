@@ -117,10 +117,16 @@ def dashboard():
                 deduped.append(row)
         mentor_tasks = deduped
 
-    # Sheet URL
+    # Sheet URL — PHASE 2: resolved from the student's own cohort_year
+    # (never trusted client input), not the old unused per-user sheet_id
+    # column.
     sheet_url = None
-    if current_user.sheet_id and current_user.sheet_id.strip():
-        sheet_url = f"https://docs.google.com/spreadsheets/d/{current_user.sheet_id}"
+    student_year = (getattr(current_user, "cohort_year", "") or "").strip()
+    if student_year:
+        from services.year_sheet_service import get_sheet_id_for_year
+        yr_sheet_id = get_sheet_id_for_year(student_year)
+        if yr_sheet_id:
+            sheet_url = f"https://docs.google.com/spreadsheets/d/{yr_sheet_id}"
 
     with get_db() as db:
         user = db.execute(

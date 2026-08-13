@@ -11,31 +11,24 @@ from google.oauth2.service_account import Credentials
 
 # ================= CONFIG =================
 
-SHEET_ID = "1vucuD_-SCKFDJYC-XWNRPGJkXqu_3CyOVDTnFRezusE"
-
+# PHASE 2: the old shared SHEET_ID constant is gone — spreadsheet IDs now
+# live in the year_sheets DB table, resolved per-student via
+# services/year_sheet_service.py. CREDENTIALS_FILE (local-dev fallback
+# only; GOOGLE_SERVICE_JSON env var is preferred) stays here since
+# several other modules still import it from this file.
 CREDENTIALS_FILE = "valiant-splicer-489013-q2-40d3ac23a2d8.json"
 LC_CACHE_FILE = "lc_cache.json"
 
 # ================= GOOGLE SHEETS =================
 
-def get_sheet(username):
-    """Get or create a per-user worksheet tab inside the main spreadsheet."""
-    import os
-    import json
-    from google.oauth2.service_account import Credentials
-
-    scope = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-
-    if os.getenv("GOOGLE_SERVICE_JSON"):
-        service_info = json.loads(os.environ["GOOGLE_SERVICE_JSON"])
-        creds = Credentials.from_service_account_info(service_info, scopes=scope)
-    else:
-        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scope)
-    CLIENT = gspread.authorize(creds)
-    spreadsheet = CLIENT.open_by_key(SHEET_ID)
+def get_sheet(username, year):
+    """Get or create a per-student worksheet tab inside that STUDENT'S
+    YEAR spreadsheet (PHASE 2: one spreadsheet per year/cohort, resolved
+    via services/year_sheet_service.py — no more single shared SHEET_ID).
+    `year` must already be a trusted value — the caller's own
+    cohort_year from the DB, never client-supplied input."""
+    from services.year_sheet_service import open_year_spreadsheet
+    spreadsheet = open_year_spreadsheet(year)
 
     # Try to find existing tab for this user
     try:
@@ -134,7 +127,7 @@ def regroup_sheet(sheet):
         except Exception as e:
             print("Merge error:", e)
 
-def backfill_missing_rows_from_db(user_id, username, get_db):
+def backfill_missing_rows_from_db(user_id, username, get_db, year):
     """
     Safe alternative to rebuild_user_sheet_from_db: find rows that exist in
     Postgres but are missing from the sheet (matched by problem URL) and
@@ -143,8 +136,10 @@ def backfill_missing_rows_from_db(user_id, username, get_db):
     killed on timeout mid-write - that can leave the sheet empty. Use this
     instead of the full rebuild to catch the sheet up with rows that got
     stuck in the DB from an earlier failed sync.
+    `year` is the student's cohort year (PHASE 2) — resolves which
+    year-specific spreadsheet this student's tab lives in.
     """
-    sheet = get_sheet(username)
+    sheet = get_sheet(username, year)
     existing = sheet.get_all_values()
     existing_urls = set(
         r[2].strip() for r in existing[1:] if len(r) > 2 and r[2].strip()
@@ -229,11 +224,13 @@ def backfill_missing_rows_from_db(user_id, username, get_db):
     return len(rows)
 
 
-def rebuild_user_sheet_from_db(user_id, username, get_db):
+def rebuild_user_sheet_from_db(user_id, username, get_db, year):
     """
     Wipe this user's Google Sheet tab and rewrite it completely from
     PostgreSQL. PostgreSQL is always the source of truth — this is the
     "someone deleted rows in the Sheet, get them back" button.
+    `year` is the student's cohort year (PHASE 2) — resolves which
+    year-specific spreadsheet this student's tab lives in.
     """
     with get_db() as db:
         subs = db.execute("""
@@ -286,9 +283,7 @@ def rebuild_user_sheet_from_db(user_id, username, get_db):
             1,
         ])
     
-    sheet = get_sheet(username)
-
-    # Snapshot whatever is currently in the sheet BEFORE clearing anything.
+    sheet = get_sheet(username, year)
     # If the write below fails halfway (network hiccup, Google API quota,
     # a bad row, etc.) we restore this snapshot instead of leaving the
     # sheet cleared — a rebuild must never be able to make things worse
@@ -353,7 +348,7 @@ def rebuild_user_sheet_from_db(user_id, username, get_db):
     return len(rows)
 
 
-def append_new_rows_to_sheet(username, new_rows):
+def append_new_rows_to_sheet(username, new_rows, year):
     """
     Non-destructive path used by every normal "Sync Now" call: only APPEND
     the rows that are new this run, then fix up the COUNT column and the
@@ -361,8 +356,10 @@ def append_new_rows_to_sheet(username, new_rows):
     here can't collapse existing data — worst case the new rows just don't
     show up yet, and they're already safe in Postgres for the next sync or
     an explicit "Restore sheet" to pick up.
+    `year` is the student's cohort year (PHASE 2) — resolves which
+    year-specific spreadsheet this student's tab lives in.
     """
-    sheet = get_sheet(username)
+    sheet = get_sheet(username, year)
 
     # Same explicit-row-number approach as backfill: merged DATE cells can
     # confuse append_rows()'s auto "next empty row" detection and cause it
@@ -785,6 +782,7 @@ def sync_user_data(user, get_db):
     lc_handle = (user.get("lc_handle") or "").strip()
     ac_handle = (user.get("ac_handle") or "").strip()
     username  = (user.get("username") or f"user_{user['id']}").strip()
+    year      = (user.get("cohort_year") or "").strip() or None
 
     print(f"\n🔄 Syncing for user: {username}")
     print(f"   CF={cf_handle or '(none)'}  LC={lc_handle or '(none)'}  AC={ac_handle or '(none)'}")
@@ -872,13 +870,20 @@ def sync_user_data(user, get_db):
     sheet_msg = None
     sheet_ok = True
     if new_rows:
-        try:
-            append_new_rows_to_sheet(username, new_rows)
-            print(f"📄 Added {len(new_rows)} rows to tab '{username}'")
-        except Exception as e:
+        if not year:
+            # PHASE 2: no cohort_year yet (unassigned student) — DB save
+            # above already happened, just can't resolve a sheet. Don't
+            # guess a spreadsheet; surface a clear, actionable message.
             sheet_ok = False
-            sheet_msg = f"⚠️ Data saved to database, but sheet update failed: {e}"
-            print("Sheet error:", e)
+            sheet_msg = "⚠️ Data saved to database, but you're not assigned to a year/cohort yet — ask your mentor to set one so your sheet can sync."
+        else:
+            try:
+                append_new_rows_to_sheet(username, new_rows, year)
+                print(f"📄 Added {len(new_rows)} rows to tab '{username}' ({year} sheet)")
+            except Exception as e:
+                sheet_ok = False
+                sheet_msg = f"⚠️ Data saved to database, but sheet update failed: {e}"
+                print("Sheet error:", e)
     else:
         print(f"📄 No new rows for '{username}'")
 

@@ -54,6 +54,29 @@
 <script>
 const platformCls = p => (p || "").toLowerCase().replace("leetcode", "lc").replace("codeforces", "cf").replace("atcoder", "ac");
 
+// PHASE 2: every mentor request is scoped to one year at a time. Read it
+// from the URL (?year=2028) so switching years is just a link/reload,
+// same pattern as switching tabs elsewhere in the app.
+let CURRENT_YEAR = new URLSearchParams(location.search).get("year") || "";
+function withYear(path) {
+  if (!CURRENT_YEAR) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}year=${encodeURIComponent(CURRENT_YEAR)}`;
+}
+function switchYear(y) {
+  const url = new URL(location.href);
+  url.searchParams.set("year", y);
+  location.href = url.toString();
+}
+async function addYearSheet() {
+  const year = document.getElementById("newYearInput").value.trim();
+  const sid = document.getElementById("newYearSheetId").value.trim();
+  if (!year || !sid) { showToast("Enter both a year and a spreadsheet ID.", "error"); return; }
+  const d = await apiPostForm("/admin/year_sheets", { year, spreadsheet_id: sid });
+  showToast(d.message || (d.success ? "Saved!" : "Failed"), d.success ? "success" : "error");
+  if (d.success) switchYear(year);
+}
+
 function fillForm(name, url, diff, topic) {
   document.getElementById("f_name").value = name;
   document.getElementById("f_url").value = url;
@@ -74,6 +97,7 @@ document.addEventListener("submit", async (e) => {
   if (e.target.id === "assignForm") {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target).entries());
+    fd.year = CURRENT_YEAR;
     const d = await apiPostForm("/admin/mentor", fd);
     showToast(d.message || (d.success ? "Assigned!" : "Failed"), d.success ? "success" : "error");
     if (d.success) location.reload();
@@ -101,13 +125,14 @@ async function assignToAll() {
   if (!confirm(`Assign "${pname}" to ALL students?`)) return;
   fd.assign_all = "1";
   fd.user_id = "0";
+  fd.year = CURRENT_YEAR;
   const d = await apiPostForm("/admin/mentor", fd);
   showToast(d.message || (d.success ? "Done!" : "Failed"), d.success ? "success" : "error");
   if (d.success) location.reload();
 }
 
 async function refreshAssignmentStatuses() {
-  const d = await apiPostJSON("/admin/mentor/refresh_status", {});
+  const d = await apiPostJSON(withYear("/admin/mentor/refresh_status"), {});
   showToast(d.message || "Refreshed.", d.success ? "success" : "error");
   if (d.success) location.reload();
 }
@@ -205,7 +230,7 @@ async function runProblemSearch(e) {
   const pname = document.getElementById("sp_name").value.trim();
   const purl = document.getElementById("sp_url").value.trim();
   if (!pname && !purl) { showToast("Enter a problem name or URL to search.", "error"); return; }
-  const d = await apiGet(`/admin/mentor/search_problem?problem_name=${encodeURIComponent(pname)}&problem_url=${encodeURIComponent(purl)}`);
+  const d = await apiGet(withYear(`/admin/mentor/search_problem?problem_name=${encodeURIComponent(pname)}&problem_url=${encodeURIComponent(purl)}`));
   if (!d.success) { showToast(d.message || "Search failed.", "error"); return; }
   searchResults = d;
   lastSearch = { pname, purl };
@@ -217,7 +242,7 @@ async function removeRegnColumn() {
   btn.disabled = true;
   btn.textContent = "Removing...";
   try {
-    const d = await apiPostJSON("/admin/mentor/remove_regn_column", {});
+    const d = await apiPostJSON(withYear("/admin/mentor/remove_regn_column"), {});
     showToast(d.removed ? "Regn Num column removed from the sheet." : (d.success ? "Already removed — nothing to do." : (d.error || "Failed.")), d.success ? "success" : "error");
   } catch (e) {
     showToast("Failed — network or server error.", "error");
@@ -234,7 +259,7 @@ async function refreshSearchResult() {
   const btn = document.getElementById("searchRefreshBtn");
   if (btn) { btn.disabled = true; btn.classList.add("spinning"); }
   try {
-    const d = await apiGet(`/admin/mentor/search_problem?problem_name=${encodeURIComponent(lastSearch.pname)}&problem_url=${encodeURIComponent(lastSearch.purl)}`);
+    const d = await apiGet(withYear(`/admin/mentor/search_problem?problem_name=${encodeURIComponent(lastSearch.pname)}&problem_url=${encodeURIComponent(lastSearch.purl)}`));
     if (!d.success) { showToast(d.message || "Refresh failed.", "error"); return; }
     searchResults = d;
     renderSearchResults();
@@ -267,7 +292,45 @@ function renderSearchResults() {
   const me = await requireAuth({ admin: true });
   if (!me) return;
 
-  MENTOR_DATA = await apiGet("/admin/mentor");
+  const yearData = await apiGet("/admin/year_sheets");
+  const yearSheets = (yearData && yearData.year_sheets) || [];
+  const configuredYears = yearSheets.map(y => y.year);
+
+  const yearManagerHTML = `
+    <div class="settings-card" style="margin-bottom:1.25rem">
+      <div class="settings-section">
+        <h3>📅 Year / Cohort Sheets</h3>
+        <p class="section-desc">Each year has its own separate Google Sheet. Add a new year here, or pick an existing one below to manage it.</p>
+        <div style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:flex-end;margin-bottom:.75rem">
+          <div class="form-group" style="margin:0"><label class="form-label">Year</label>
+            <input class="form-input" id="newYearInput" placeholder="e.g. 2028" style="width:140px"></div>
+          <div class="form-group" style="margin:0;flex:1;min-width:220px"><label class="form-label">Spreadsheet ID</label>
+            <input class="form-input mono" id="newYearSheetId" placeholder="1AbC...xyz"></div>
+          <button type="button" class="btn btn-primary" onclick="addYearSheet()">Save</button>
+        </div>
+      </div>
+    </div>`;
+
+  if (!configuredYears.length) {
+    document.getElementById("app").innerHTML = `
+      <div class="page-header"><div><h2>🎓 Mentor Mode</h2><p class="page-sub">No years configured yet</p></div></div>
+      ${yearManagerHTML}
+      <p class="muted">Add a year and its spreadsheet ID above to get started — students can't sign up until at least one year exists.</p>`;
+    return;
+  }
+
+  if (!CURRENT_YEAR || !configuredYears.includes(CURRENT_YEAR)) {
+    CURRENT_YEAR = configuredYears[0];
+  }
+
+  const yearSelectorHTML = `
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem;align-items:center">
+      <span class="form-label" style="margin:0">Year:</span>
+      ${configuredYears.map(y => `<button type="button" class="filter-tab ${y === CURRENT_YEAR ? 'active' : ''}" onclick="switchYear('${y}')">${y}</button>`).join("")}
+      <button type="button" class="btn-sm btn-outline" onclick="switchMentorTab('years')" style="margin-left:auto">⚙️ Manage Years</button>
+    </div>`;
+
+  MENTOR_DATA = await apiGet(withYear("/admin/mentor"));
   const { users, custom_probs, user_progress } = MENTOR_DATA;
 
   const studentOptions = (users || []).map(u => {
@@ -296,8 +359,10 @@ function renderSearchResults() {
     <a href="admin.html" class="btn btn-outline">← Admin Panel</a>
   </div>
 
+  ${yearSelectorHTML}
+
   <div class="table-card" style="padding:1.1rem 1.1rem 0">
-    <div class="card-header" style="margin-bottom:.6rem"><h3>📈 Student Progress</h3><span class="card-tag">${(users || []).length} students</span></div>
+    <div class="card-header" style="margin-bottom:.6rem"><h3>📈 Student Progress — ${CURRENT_YEAR}</h3><span class="card-tag">${(users || []).length} students</span></div>
     <div id="progressGridWrap"></div>
   </div>
 
@@ -305,7 +370,18 @@ function renderSearchResults() {
     <button type="button" class="filter-tab active" data-tab="assign" onclick="switchMentorTab('assign')">📌 Assign Problem</button>
     <button type="button" class="filter-tab" data-tab="create" onclick="switchMentorTab('create')">🧩 Create Problem</button>
     <button type="button" class="filter-tab" data-tab="search" onclick="switchMentorTab('search')">🔍 Search Problem</button>
+    <button type="button" class="filter-tab" data-tab="years" onclick="switchMentorTab('years')">📅 Years</button>
   </div>
+
+  <div id="tab-years" class="mentor-tab-panel">
+    ${yearManagerHTML}
+    <div class="table-card" style="padding:1.1rem">
+      <h3 style="margin-bottom:.6rem">Configured years</h3>
+      <div class="table-wrap"><table><thead><tr><th>Year</th><th>Spreadsheet ID</th><th>Updated</th></tr></thead>
+      <tbody>${yearSheets.map(y => `<tr><td class="mono">${y.year}</td><td class="mono small">${y.spreadsheet_id}</td><td class="small muted">${y.updated_at || '—'}</td></tr>`).join("")}</tbody></table></div>
+    </div>
+  </div>
+
 
   <div id="tab-assign" class="mentor-tab-panel active">
     <div class="settings-card">

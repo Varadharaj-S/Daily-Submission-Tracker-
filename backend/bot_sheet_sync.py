@@ -17,7 +17,7 @@ from google.oauth2.service_account import Credentials
 # CONFIG
 # ===============================
 
-SHEET_ID         = "1vucuD_-SCKFDJYC-XWNRPGJkXqu_3CyOVDTnFRezusE"
+SHEET_ID         = None  # PHASE 2: resolved per-user below from cohort_year via services/year_sheet_service.py (no more shared spreadsheet)
 CREDENTIALS_FILE ="valiant-splicer-489013-q2-40d3ac23a2d8.json"
 
 # ===============================
@@ -42,6 +42,7 @@ LC_USER    = (user_row.get("lc_handle") or "").strip()
 AC_USER    = (user_row.get("ac_handle") or "").strip()
 USERNAME   = (user_row.get("username")  or f"user_{user_id}").strip()
 USER_EMAIL = (user_row.get("email")     or "").strip()
+COHORT_YEAR = (user_row.get("cohort_year") or "").strip() or None
 
 # LeetCode session/csrf from user's saved settings
 LEETCODE_SESSION = (user_row.get("lc_session_cookie") or "").strip()
@@ -732,6 +733,14 @@ if all_data:
         print(f"⏳ [{USERNAME}] waiting for sheet-sync turn...")
 
         with FileLock(SHEET_LOCK_PATH, timeout=300):
+
+            from services.year_sheet_service import get_sheet_id_for_year
+            if not COHORT_YEAR:
+                raise RuntimeError(f"'{USERNAME}' has no year/cohort assigned yet — data was saved to the "
+                                    "database, but skipping the Google Sheet write until a mentor assigns a year.")
+            SHEET_ID = get_sheet_id_for_year(COHORT_YEAR)
+            if not SHEET_ID:
+                raise RuntimeError(f"No Google Sheet configured for year '{COHORT_YEAR}' yet — ask a mentor to set one up.")
 
             client = gspread.authorize(creds)
             spreadsheet = client.open_by_key(SHEET_ID)
