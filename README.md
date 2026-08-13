@@ -1,4 +1,4 @@
-# ⚡ DSA Tracker
+# ⚡ Daily Submission Automation - Tracker
 
 ### Year-Wise Competitive Programming Tracking, Mentoring & Analytics Platform
 
