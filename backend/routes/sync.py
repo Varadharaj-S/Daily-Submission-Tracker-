@@ -117,6 +117,23 @@ def import_lc():
 
     user_id = current_user.id
 
+    # PERF/safety: don't let a double-click (or a retried request) start a
+    # second concurrent import for the same user — that would double every
+    # LeetCode GraphQL call this process makes, race the DB insert, and
+    # race the Google Sheet rebuild. lc_import_status lives in the shared
+    # Postgres DB (same DB for both the Vercel layer and the Render worker),
+    # so this check is accurate regardless of which one handles the actual
+    # import. This only blocks a *duplicate* import for the SAME user; it
+    # never touches other users, and status polling below remains strictly
+    # read-only (never restarts anything).
+    user_dict = dict(user)
+    if str(user_dict.get("lc_import_status") or "").lower() in ("queued", "running"):
+        return jsonify({
+            "success": True,
+            "status": "started",
+            "message": "Import already in progress. You can continue using the dashboard."
+        })
+
     if _worker_configured():
         # ── Delegate to the persistent worker, return immediately ────────
         try:

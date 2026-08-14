@@ -60,11 +60,15 @@ def _run_import(user_id: int):
             capture_output=False,
             cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
-        status = "completed" if result.returncode == 0 else "failed"
-        print(f"[internal] import finished for user {user_id}, status={status}")
+        if result.returncode == 0:
+            status = "completed"
+            print(f"[internal] import finished for user {user_id}, status=completed")
+        else:
+            status = "failed"
+            print(f"[IMPORT] FAILED: subprocess exited with returncode={result.returncode} for user {user_id}")
     except Exception as e:
         status = "failed"
-        print(f"[internal] import exception for user {user_id}: {e}")
+        print(f"[IMPORT] FAILED: exception launching import for user {user_id}: {type(e).__name__}: {e}")
 
     try:
         with get_db() as db:
@@ -102,16 +106,29 @@ def internal_trigger_import():
     if not user["lc_session_cookie"]:
         return jsonify({"ok": False, "error": "no lc_session_cookie for user"}), 400
 
-    # Mark queued immediately
+    # PERF/safety: atomically claim the "queued" state — the UPDATE only
+    # applies (and only returns a row) if no import is already
+    # queued/running for this user. This is the authoritative side (the
+    # process that actually spawns the subprocess), and doing the check
+    # and the write as one statement closes the race window a plain
+    # SELECT-then-UPDATE would leave between two trigger requests landing
+    # close together for the same user.
     try:
         with get_db() as db:
-            db.execute(
-                "UPDATE users SET lc_import_status=%s WHERE id=%s",
+            claimed = db.execute(
+                """UPDATE users SET lc_import_status=%s
+                   WHERE id=%s AND (lc_import_status IS NULL OR lc_import_status NOT IN ('queued','running'))""",
                 ("queued", user_id)
             )
+            row_claimed = claimed.rowcount > 0
             db.commit()
     except Exception as e:
         print(f"[internal] could not mark queued: {e}")
+        row_claimed = True  # don't block the import over a logging-adjacent failure
+
+    if not row_claimed:
+        return jsonify({"ok": True, "status": "already_running", "user_id": user_id,
+                         "message": "already in progress"})
 
     # Fire the import in a background thread — safe on Render (persistent process)
     t = threading.Thread(target=_run_import, args=(user_id,), daemon=True)
