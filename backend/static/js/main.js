@@ -149,25 +149,43 @@ async function importLeetCodeChunk() {
   });
 }
 
-/* ── importLC() — the single "Import LC" button's click handler ─────────
-   ROOT CAUSE (originally): dashboard.html's button has always called
-   onclick="importLC()", but no such function existed anywhere in the
-   frontend. Clicking threw a silent "importLC is not defined"
-   ReferenceError before any fetch() ever ran, so nothing reached the
-   backend and nothing showed up in Network or Vercel logs.
+/* ── Import LC — ONE button, THREE real sequential backend requests ────
+   importLC() is the entire workflow behind the single "Import LC"
+   button. It performs, IN ORDER, awaiting each real HTTP response
+   before starting the next:
 
-   Per explicit instruction this revision, the click path now calls the
-   backend's existing POST /import_lc endpoint directly (routes/sync.py —
-   the one synchronous request that already runs the real CF+AtCoder+
-   LeetCode import and returns the real final result). No chaining, no
-   polling, no /import_lc/status, no setInterval, no new endpoint —
-   exactly one fetch() per click. */
+     1) POST /import_codeforces   (one request, real result)
+     2) POST /import_atcoder      (one request, real result)
+     3) POST /import_leetcode     (one request per chunk; looped here
+        while the real response says has_more:true, using the offset
+        the backend already persisted — never restarted at 0)
+
+   This is NOT status polling: every call in the loop is a genuine
+   import request that processes the next data chunk and returns a
+   real result (fetched/written counts), never a bare {"status":
+   "started"}. There is no setInterval and no /status endpoint.
+
+   If Codeforces or AtCoder fails, the whole workflow stops immediately
+   and the real error is shown — AtCoder/LeetCode never start. If a
+   LeetCode chunk fails, the loop stops at that chunk; the backend
+   never advanced lc_import_offset for the failed chunk, so pressing
+   Import LC again retries safely from the same position (after CF/AC
+   re-run, since CF/AtCoder/LeetCode always run in that fixed order).
+
+   NOTE: this function used to be written into backend/static/js/main.js
+   (a file dashboard.html never actually <script>-loads) instead of
+   here. That was the root cause of Import LC doing nothing — this is
+   the same implementation, moved into the file that's actually served. */
+
+function _importLog(lines, status) {
+  if (!status) return;
+  status.style.display = "block";
+  status.className = "sync-status";
+  status.innerHTML = lines.map(l => `<div>${l}</div>`).join("");
+}
+
 async function importLC() {
-  const btn     = document.getElementById("importLcBtn");
-  const label   = document.getElementById("importLcLabel");
-  const spinner = document.getElementById("importLcSpinner");
-  const status  = document.getElementById("importStatus");
-
+  const btn = document.getElementById("importLcBtn");
   if (!btn) {
     console.error("[IMPORT LC] BUTTON NOT FOUND");
     return;
@@ -178,44 +196,114 @@ async function importLC() {
   if (window.importRunning) return;
   window.importRunning = true;
 
+  const label   = document.getElementById("importLcLabel");
+  const spinner = document.getElementById("importLcSpinner");
+  const status  = document.getElementById("importStatus");
+
+  if (!confirm("This imports your Codeforces, AtCoder, and LeetCode history (in that order) and updates your sheet. Continue?")) {
+    window.importRunning = false;
+    return;
+  }
+
   btn.disabled = true;
   if (spinner) spinner.style.display = "inline-block";
-  if (status) {
-    status.style.display = "block";
-    status.className = "sync-status";
-    status.textContent = "Importing… this can take a while on a first-time import.";
-  }
+
+  const lines = ["Importing..."];
+  _importLog(lines, status);
+
+  const tStart = performance.now();
+  const totals = { cfFetched: 0, cfNew: 0, acFetched: 0, acNew: 0, lcFetched: 0, lcNew: 0 };
+
+  const setLast = (text) => { lines[lines.length - 1] = text; };
 
   try {
-    console.log("[IMPORT LC] SENDING REQUEST");
-    const fetchPromise = fetch(BASE_API_URL + "/import_lc", { method: "POST", credentials: "include" });
+    // CALL 1/3 — Codeforces (one request, real result)
+    lines.push("Codeforces → Running...");
+    _importLog(lines, status);
+    console.log("[IMPORT LC] SENDING REQUEST", "/import_codeforces");
+    let res = await fetch(BASE_API_URL + "/import_codeforces", { method: "POST", credentials: "include" });
     console.log("[IMPORT LC] REQUEST SENT");
-
-    const res = await fetchPromise;
-    console.log("[IMPORT LC] RESPONSE RECEIVED", res.status);
-
-    const data = await res.json();
-
-    if (status) {
-      status.className = "sync-status " + (data.success ? "sync-ok" : "sync-err");
-      status.textContent = data.message || (data.success ? "Done ✅" : "Failed");
+    let data = await res.json();
+    console.log("[IMPORT LC] RESPONSE RECEIVED", res.status, data);
+    if (!data.success) {
+      setLast(`Codeforces → Failed — ${data.message || "unknown error"}`);
+      _importLog(lines, status);
+      showToast(data.message || "Codeforces import failed", "error");
+      return;
     }
-    showToast(data.message || (data.success ? "Import complete ✅" : "Import failed"), data.success ? "success" : "error");
+    totals.cfFetched = data.rows_fetched || 0;
+    totals.cfNew = data.db_rows_written || 0;
+    setLast("Codeforces → Completed");
+    _importLog(lines, status);
 
-    if (data.success) {
-      setTimeout(() => location.reload(), 1400);
-      return; // keep button disabled until reload
+    // CALL 2/3 — AtCoder (one request, real result)
+    lines.push("AtCoder → Running...");
+    _importLog(lines, status);
+    console.log("[IMPORT LC] SENDING REQUEST", "/import_atcoder");
+    res = await fetch(BASE_API_URL + "/import_atcoder", { method: "POST", credentials: "include" });
+    console.log("[IMPORT LC] REQUEST SENT");
+    data = await res.json();
+    console.log("[IMPORT LC] RESPONSE RECEIVED", res.status, data);
+    if (!data.success) {
+      setLast(`AtCoder → Failed — ${data.message || "unknown error"}`);
+      _importLog(lines, status);
+      showToast(data.message || "AtCoder import failed", "error");
+      return;
     }
+    totals.acFetched = data.rows_fetched || 0;
+    totals.acNew = data.db_rows_written || 0;
+    setLast("AtCoder → Completed");
+    _importLog(lines, status);
+
+    // CALL 3/3 — LeetCode, one real request per chunk, auto-continued
+    // here (not polling — each iteration is a fresh import request that
+    // processes the next saved offset) until has_more is false.
+    let chunkNum = 1;
+    let hasMore = true;
+    while (hasMore) {
+      lines.push(`LeetCode → Chunk ${chunkNum}...`);
+      _importLog(lines, status);
+      console.log("[IMPORT LC] SENDING REQUEST", "/import_leetcode", `chunk ${chunkNum}`);
+      res = await fetch(BASE_API_URL + "/import_leetcode", { method: "POST", credentials: "include" });
+      console.log("[IMPORT LC] REQUEST SENT");
+      data = await res.json();
+      console.log("[IMPORT LC] RESPONSE RECEIVED", res.status, data);
+      if (!data.success) {
+        setLast(`LeetCode → Chunk ${chunkNum} failed — ${data.message || "unknown error"}`);
+        _importLog(lines, status);
+        showToast(data.message || "LeetCode import failed", "error");
+        return;
+      }
+      totals.lcFetched += data.rows_fetched || 0;
+      totals.lcNew += data.db_rows_written || 0;
+      hasMore = !!data.has_more;
+      setLast(`LeetCode → Chunk ${chunkNum} (${data.rows_fetched || 0} fetched)`);
+      _importLog(lines, status);
+      chunkNum++;
+    }
+
+    const totalSeconds = ((performance.now() - tStart) / 1000).toFixed(1);
+    lines.push("Import Completed ✅");
+    lines.push(
+      `CF ${totals.cfFetched} fetched / ${totals.cfNew} new · ` +
+      `AC ${totals.acFetched} fetched / ${totals.acNew} new · ` +
+      `LC ${totals.lcFetched} fetched / ${totals.lcNew} new · ${totalSeconds}s total`
+    );
+    _importLog(lines, status);
+    showToast("Import complete ✅", "success");
+    setTimeout(() => location.reload(), 2500);
   } catch (error) {
     console.error("[IMPORT LC] CLICK HANDLER ERROR", error);
+    lines.push("Import failed — network error, please try again");
+    _importLog(lines, status);
     showToast("Network error — please try again.", "error");
-    if (status) { status.className = "sync-status sync-err"; status.textContent = "Network error — please try again."; }
   } finally {
-    window.importRunning = false;
+    btn.disabled = false;
     if (spinner) spinner.style.display = "none";
+    window.importRunning = false;
   }
-  btn.disabled = false;
 }
+
 
 
 async function toggleAutoSync() {
