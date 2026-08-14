@@ -41,23 +41,12 @@
 const platformCls = p => (p || "").toLowerCase().replace("codeforces", "cf").replace("leetcode", "lc").replace("atcoder", "ac");
 let DASH;
 
-/* ── Import LC — ONE button, THREE independent backend requests ────────
-   The UI exposes a single "Import LC" button. Under the hood it awaits
-   three separate single-purpose endpoints in strict order — CF, then
-   AtCoder, then LeetCode — each its own real HTTP request/response, no
-   combined backend request and no /status polling:
-
-     POST /import_codeforces  (one shot)
-     POST /import_atcoder     (one shot)
-     POST /import_leetcode    (one chunk; auto-repeated by main.js's
-                                importLC() while has_more:true, using the
-                                offset already persisted server-side —
-                                never restarts at 0, never a setInterval)
-
-   This is what replaced the old combined /import_lc (CF+AtCoder+LC in
-   one request), which could exceed the deployed Vercel function's
-   execution limit and 504 on a first-time LeetCode import. See
-   routes/sync.py / sync/chunked_import.py and main.js's importLC().
+/* ── Import LC ───────────────────────────────────────────────────────
+   The "Import LC" button calls importLeetCode() (defined in
+   assets/js/main.js), which POSTs once to /import_lc and then polls
+   GET /import_lc/status every 8s until the worker (bot_sheet_sync.py)
+   reports completed/failed. See routes/sync.py, routes/internal.py,
+   and backend/bot_sheet_sync.py.
 ──────────────────────────────────────────────────────────────────── */
 
 async function sendFeedback() {
@@ -99,7 +88,7 @@ function renderDashboard() {
         <span id="syncSpinner" class="spinner" style="display:none"></span>
       </button>
       ${!user.lc_imported ? `
-      <button id="importLcBtn" class="btn btn-import" onclick="importLC()">
+      <button id="importLcBtn" class="btn btn-import" onclick="importLeetCode()">
         <span id="importLcLabel">📥 Import LC${user.lc_import_offset ? " (resume)" : ""}</span>
         <span id="importLcSpinner" class="spinner" style="display:none"></span>
       </button>
@@ -137,7 +126,7 @@ function renderDashboard() {
   <div class="workflow-grid">
     <div class="workflow-card workflow-import">
       <div class="workflow-head"><span class="workflow-step">1</span><h3>Import</h3></div>
-      <p>Three separate one-click imports — Codeforces, AtCoder, and LeetCode (in resumable chunks for a first-time full history import). Each updates the database and your sheet.</p>
+      <p>A one-click full LeetCode history import (Codeforces and AtCoder are picked up automatically too). Updates the database and your sheet.</p>
       <div class="workflow-meta"><span class="pill">${user.lc_imported ? "LeetCode: Done" : (user.lc_import_offset ? "LeetCode: In progress" : "LeetCode: Pending")}</span></div>
     </div>
     <div class="workflow-card workflow-auto">
