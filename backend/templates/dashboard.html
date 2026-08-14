@@ -354,17 +354,20 @@ async function importLeetCode() {
 
         const data = await res.json();
 
+        // data.success here means the import ACTUALLY finished (fetch +
+        // dedupe + DB write + Sheet write) — /import_lc is synchronous now,
+        // this is not a "started" response.
         alert(data.message);
 
         if (data.success) {
 
             if (label) {
-                label.innerText = "⏳ Import Running...";
+                label.innerText = "Import Completed ✅";
             }
 
             setTimeout(() => {
                 location.reload();
-            }, 5000);
+            }, 1200);
 
         }else {
 

@@ -3,9 +3,14 @@ routes/internal.py — Internal endpoints only reachable from within the
 persistent worker deployment (Render — see render.yaml / Procfile), or via
 a shared secret. NOT exposed to the public.
 
-These endpoints allow the Vercel serverless layer to delegate long-running
-work (like a full LeetCode import) to the Render persistent backend, so the
-Vercel request can return immediately and avoid a 504.
+NOTE: the Import LC delegation endpoints that used to live here
+(/internal/trigger_import, /internal/import_status/<id>) have been removed.
+/import_lc (routes/sync.py) now runs synchronously in-request instead of
+being handed off to this worker in the background — see routes/sync.py's
+module docstring.
+
+The cron delegation endpoints below are unrelated to Import LC and are
+unchanged.
 
 Security: every request must carry the correct Config.INTERNAL_TASK_SECRET
 value in the X-Internal-Secret header. Set INTERNAL_TASK_SECRET to the same
@@ -13,13 +18,11 @@ long random string in both your Vercel and Render environment variable
 panels (see config.py — this is the single source of truth for the name).
 """
 
-import os
 import threading
 
 from flask import request, jsonify
 
 from extensions import app
-from database.db import get_db
 from config import Config
 
 
@@ -35,132 +38,6 @@ def _require_internal_secret():
         return False, (jsonify({"ok": False, "error": "Forbidden"}), 403)
 
     return True, None
-
-
-def _run_import(user_id: int):
-    """Runs the full LC import in a background thread (safe on Render — the
-    process stays alive between requests). Updates lc_import_status in the
-    users table so the frontend can poll for completion."""
-    import subprocess, sys
-
-    # Mark as running
-    try:
-        with get_db() as db:
-            db.execute(
-                "UPDATE users SET lc_import_status=%s WHERE id=%s",
-                ("running", user_id)
-            )
-            db.commit()
-    except Exception as e:
-        print(f"[internal] could not mark running: {e}")
-
-    try:
-        result = subprocess.run(
-            [sys.executable, "bot_sheet_sync.py", str(user_id), "import"],
-            capture_output=False,
-            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        )
-        if result.returncode == 0:
-            status = "completed"
-            print(f"[internal] import finished for user {user_id}, status=completed")
-        else:
-            status = "failed"
-            print(f"[IMPORT] FAILED: subprocess exited with returncode={result.returncode} for user {user_id}")
-    except Exception as e:
-        status = "failed"
-        print(f"[IMPORT] FAILED: exception launching import for user {user_id}: {type(e).__name__}: {e}")
-
-    try:
-        with get_db() as db:
-            db.execute(
-                "UPDATE users SET lc_import_status=%s WHERE id=%s",
-                (status, user_id)
-            )
-            db.commit()
-    except Exception as e:
-        print(f"[internal] could not mark {status}: {e}")
-
-
-@app.route("/internal/trigger_import", methods=["POST"])
-def internal_trigger_import():
-    """Called by the Vercel /import_lc route.
-    Validates the secret, then starts the import in a background thread
-    and returns immediately so the caller never waits for the full import."""
-    ok, err = _require_internal_secret()
-    if not ok:
-        return err
-
-    data = request.get_json(silent=True) or {}
-    user_id = data.get("user_id")
-    if not user_id:
-        return jsonify({"ok": False, "error": "user_id required"}), 400
-
-    # Verify user exists and has a LeetCode session saved
-    with get_db() as db:
-        user = db.execute(
-            "SELECT id, lc_session_cookie FROM users WHERE id=%s", (user_id,)
-        ).fetchone()
-
-    if not user:
-        return jsonify({"ok": False, "error": "user not found"}), 404
-    if not user["lc_session_cookie"]:
-        return jsonify({"ok": False, "error": "no lc_session_cookie for user"}), 400
-
-    # PERF/safety: atomically claim the "queued" state — the UPDATE only
-    # applies (and only returns a row) if no import is already
-    # queued/running for this user. This is the authoritative side (the
-    # process that actually spawns the subprocess), and doing the check
-    # and the write as one statement closes the race window a plain
-    # SELECT-then-UPDATE would leave between two trigger requests landing
-    # close together for the same user.
-    try:
-        with get_db() as db:
-            claimed = db.execute(
-                """UPDATE users SET lc_import_status=%s
-                   WHERE id=%s AND (lc_import_status IS NULL OR lc_import_status NOT IN ('queued','running'))""",
-                ("queued", user_id)
-            )
-            row_claimed = claimed.rowcount > 0
-            db.commit()
-    except Exception as e:
-        print(f"[internal] could not mark queued: {e}")
-        row_claimed = True  # don't block the import over a logging-adjacent failure
-
-    if not row_claimed:
-        return jsonify({"ok": True, "status": "already_running", "user_id": user_id,
-                         "message": "already in progress"})
-
-    # Fire the import in a background thread — safe on Render (persistent process)
-    t = threading.Thread(target=_run_import, args=(user_id,), daemon=True)
-    t.start()
-
-    return jsonify({"ok": True, "status": "queued", "user_id": user_id})
-
-
-@app.route("/internal/import_status/<int:user_id>", methods=["GET"])
-def internal_import_status(user_id):
-    """Returns the current lc_import_status for a user.
-    Called by the Vercel /import_lc/status proxy endpoint (and by the
-    frontend's poll loop via that proxy)."""
-    ok, err = _require_internal_secret()
-    if not ok:
-        return err
-
-    with get_db() as db:
-        row = db.execute(
-            "SELECT lc_import_status, lc_imported FROM users WHERE id=%s",
-            (user_id,)
-        ).fetchone()
-
-    if not row:
-        return jsonify({"ok": False, "error": "user not found"}), 404
-
-    return jsonify({
-        "ok": True,
-        "user_id": user_id,
-        "status": row["lc_import_status"] or "unknown",
-        "lc_imported": row["lc_imported"]
-    })
 
 
 # ── Cron delegation endpoints ─────────────────────────────────────────────────
