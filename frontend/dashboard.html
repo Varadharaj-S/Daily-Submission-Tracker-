@@ -377,6 +377,17 @@ function renderDashboard() {
     el.textContent = el.dataset.target;
   });
 
+  // ── Import LC diagnostics — confirms the button actually made it into
+  // the DOM on this render (and that there's exactly one of it) before
+  // the user ever clicks anything.
+  {
+    const _btns = document.querySelectorAll("#importLcBtn");
+    if (_btns.length === 1) console.log("[IMPORT LC] BUTTON FOUND");
+    else if (_btns.length === 0) console.log("[IMPORT LC] button not rendered this load (lc_imported =", !!user.lc_imported, ")");
+    else console.error("[IMPORT LC] DUPLICATE BUTTONS FOUND:", _btns.length);
+  }
+
+
   if (data.chart_labels && data.chart_labels.length && document.getElementById("actChart")) {
     new Chart(document.getElementById("actChart"), {
       type: "bar",

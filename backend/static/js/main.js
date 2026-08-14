@@ -150,28 +150,18 @@ async function importLeetCodeChunk() {
 }
 
 /* ── importLC() — the single "Import LC" button's click handler ─────────
-   ROOT CAUSE OF THE BUG: dashboard.html's button has always called
+   ROOT CAUSE (originally): dashboard.html's button has always called
    onclick="importLC()", but no such function existed anywhere in the
-   frontend — only importCodeforces()/importAtCoder()/importLeetCodeChunk()
-   did. Clicking the button threw a silent "importLC is not defined"
+   frontend. Clicking threw a silent "importLC is not defined"
    ReferenceError before any fetch() ever ran, so nothing reached the
    backend and nothing showed up in Network or Vercel logs.
 
-   Fix: define importLC() as the one function the button calls. It does
-   NOT hit a combined backend endpoint — it awaits the three EXISTING
-   single-purpose endpoints in order (unchanged backend code, per scope):
-     POST /import_codeforces  → POST /import_atcoder  → POST /import_leetcode
-   repeating /import_leetcode while has_more:true (using the offset
-   already persisted server-side). No polling, no /status, no
-   setInterval — every step is a real, separate fetch() the user is
-   waiting on.
-
-   If any stage fails, the chain stops immediately: the error is shown,
-   the button re-enables, and (because lc_imported is only flipped to 1
-   by /import_leetcode on its FINAL chunk) the backend never marks the
-   import complete — so Import LC stays visible and Feedback stays
-   hidden, satisfying the "don't mark complete too early" requirement
-   without any new DB field. */
+   Per explicit instruction this revision, the click path now calls the
+   backend's existing POST /import_lc endpoint directly (routes/sync.py —
+   the one synchronous request that already runs the real CF+AtCoder+
+   LeetCode import and returns the real final result). No chaining, no
+   polling, no /import_lc/status, no setInterval, no new endpoint —
+   exactly one fetch() per click. */
 async function importLC() {
   const btn     = document.getElementById("importLcBtn");
   const label   = document.getElementById("importLcLabel");
@@ -188,75 +178,45 @@ async function importLC() {
   if (window.importRunning) return;
   window.importRunning = true;
 
-  if (!confirm("This runs your full first-time import — Codeforces, then AtCoder, then LeetCode (LeetCode may take several presses' worth of chunks for a large history, handled automatically here). Continue?")) {
-    window.importRunning = false;
-    return;
-  }
-
   btn.disabled = true;
   if (spinner) spinner.style.display = "inline-block";
   if (status) {
     status.style.display = "block";
     status.className = "sync-status";
-    status.textContent = "Importing Codeforces…";
+    status.textContent = "Importing… this can take a while on a first-time import.";
   }
 
-  const setErr = (msg) => {
-    showToast(msg, "error");
-    if (status) { status.className = "sync-status sync-err"; status.textContent = msg; }
-  };
-
   try {
-    // ── Stage 1: Codeforces ──
-    console.log("[IMPORT LC] SENDING REQUEST", "/import_codeforces");
-    let res = await fetch(BASE_API_URL + "/import_codeforces", { method: "POST", credentials: "include" });
+    console.log("[IMPORT LC] SENDING REQUEST");
+    const fetchPromise = fetch(BASE_API_URL + "/import_lc", { method: "POST", credentials: "include" });
     console.log("[IMPORT LC] REQUEST SENT");
-    let data = await res.json();
-    console.log("[IMPORT LC] RESPONSE RECEIVED", data);
-    if (!data.success) { setErr(data.message || "Codeforces import failed"); return; }
 
-    // ── Stage 2: AtCoder ──
-    if (label) label.textContent = "📥 Importing AtCoder…";
-    if (status) status.textContent = "Importing AtCoder…";
-    console.log("[IMPORT LC] SENDING REQUEST", "/import_atcoder");
-    res = await fetch(BASE_API_URL + "/import_atcoder", { method: "POST", credentials: "include" });
-    console.log("[IMPORT LC] REQUEST SENT");
-    data = await res.json();
-    console.log("[IMPORT LC] RESPONSE RECEIVED", data);
-    if (!data.success) { setErr(data.message || "AtCoder import failed"); return; }
+    const res = await fetchPromise;
+    console.log("[IMPORT LC] RESPONSE RECEIVED", res.status);
 
-    // ── Stage 3: LeetCode — repeat chunks until has_more is false ──
-    let hasMore = true;
-    let chunk = 0;
-    while (hasMore) {
-      chunk += 1;
-      if (label) label.textContent = `📥 Importing LeetCode (chunk ${chunk})…`;
-      if (status) status.textContent = `Importing LeetCode (chunk ${chunk})…`;
-      console.log("[IMPORT LC] SENDING REQUEST", "/import_leetcode", `chunk ${chunk}`);
-      res = await fetch(BASE_API_URL + "/import_leetcode", { method: "POST", credentials: "include" });
-      console.log("[IMPORT LC] REQUEST SENT");
-      data = await res.json();
-      console.log("[IMPORT LC] RESPONSE RECEIVED", data);
-      if (!data.success) { setErr(data.message || "LeetCode import failed"); return; }
-      hasMore = !!data.has_more;
+    const data = await res.json();
+
+    if (status) {
+      status.className = "sync-status " + (data.success ? "sync-ok" : "sync-err");
+      status.textContent = data.message || (data.success ? "Done ✅" : "Failed");
     }
+    showToast(data.message || (data.success ? "Import complete ✅" : "Import failed"), data.success ? "success" : "error");
 
-    // All three stages succeeded and LeetCode has no history left — this is
-    // the only path where the backend has set lc_imported=1 for this user.
-    if (status) { status.className = "sync-status sync-ok"; status.textContent = "✅ Import complete!"; }
-    showToast("Full import complete ✅", "success");
-    setTimeout(() => location.reload(), 1400);
-    return; // keep button disabled until reload
-
+    if (data.success) {
+      setTimeout(() => location.reload(), 1400);
+      return; // keep button disabled until reload
+    }
   } catch (error) {
     console.error("[IMPORT LC] CLICK HANDLER ERROR", error);
-    setErr("Network error — please try again.");
+    showToast("Network error — please try again.", "error");
+    if (status) { status.className = "sync-status sync-err"; status.textContent = "Network error — please try again."; }
   } finally {
     window.importRunning = false;
     if (spinner) spinner.style.display = "none";
   }
   btn.disabled = false;
 }
+
 
 async function toggleAutoSync() {
   const toggle = document.getElementById("autoSyncToggle");
