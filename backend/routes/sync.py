@@ -116,6 +116,15 @@ def _parse_import_output(output: str) -> dict:
 @login_required
 def import_lc():
     """
+    LEGACY — superseded by the /import_codeforces -> /import_atcoder ->
+    /import_leetcode orchestration the "Import LC" button now drives (see
+    importLC() in assets/js/main.js). Kept only in case anything else in
+    this deployment still calls this route name directly; the frontend's
+    one Import LC button no longer does. Do not wire new UI to this
+    endpoint — a single request running CF+AtCoder+LeetCode together is
+    exactly the 300s-timeout failure mode the chunked endpoints below were
+    built to avoid.
+
     ONE synchronous action: runs the real CF + AtCoder + LeetCode fetch ->
     dedupe -> batch DB write -> batch Google Sheet write (bot_sheet_sync.py,
     unchanged), waits for it to finish, and returns the real final result.
@@ -215,7 +224,27 @@ def import_lc():
 # LeetCode below walks its history in bounded chunks — one manual button
 # press per chunk — instead of trying to fetch everything in one shot.
 
-def _run_single_shot_import(user, platform_key, fetch_fn, handle, missing_handle_message):
+def _recompute_initial_import_completed(user_id):
+    """Persisted AND of cf_imported/ac_imported/lc_imported — the single
+    DB-backed source of truth for whether the Import LC button should be
+    hidden. Recomputed (not just set) every time any of the three platform
+    flags changes, so it self-corrects and survives refresh/logout/login.
+    Returns the resulting bool."""
+    with get_db() as db:
+        row = db.execute(
+            "SELECT cf_imported, ac_imported, lc_imported FROM users WHERE id=%s",
+            (user_id,),
+        ).fetchone()
+        completed = bool(row and row["cf_imported"] and row["ac_imported"] and row["lc_imported"])
+        db.execute(
+            "UPDATE users SET initial_import_completed=%s WHERE id=%s",
+            (1 if completed else 0, user_id),
+        )
+        db.commit()
+    return completed
+
+
+def _run_single_shot_import(user, platform_key, fetch_fn, handle, missing_handle_message, imported_column):
     """Shared body for /import_codeforces and /import_atcoder: one fetch,
     one dedupe, one DB batch write, one Sheet rebuild, one real result."""
     if not handle:
@@ -253,6 +282,17 @@ def _run_single_shot_import(user, platform_key, fetch_fn, handle, missing_handle
         print(f"[{platform_name}] SHEET WRITE FAILED error={sheet_error}")
         print(traceback.format_exc().splitlines()[-1])
 
+    # Fetch actually succeeded (we only get here without having already
+    # returned on fetch_error+no rows above) — persist this platform's
+    # "has completed at least once" flag and recompute the combined
+    # initial_import_completed state from it.
+    with get_db() as db:
+        db.execute(
+            f"UPDATE users SET {imported_column}=1 WHERE id=%s", (user["id"],)
+        )
+        db.commit()
+    initial_import_completed = _recompute_initial_import_completed(user["id"])
+
     elapsed = time.time() - t_start
     print(f"[{platform_name}] IMPORT COMPLETED")
     print("=" * 50)
@@ -264,6 +304,7 @@ def _run_single_shot_import(user, platform_key, fetch_fn, handle, missing_handle
         "rows_fetched": rows_fetched,
         "db_rows_written": db_rows_written,
         "sheet_rows_written": sheet_rows_written,
+        "initial_import_completed": initial_import_completed,
         "execution_time_seconds": round(elapsed, 2),
     }
     if sheet_error:
@@ -290,7 +331,8 @@ def import_codeforces():
         return jsonify({"success": False, "message": "User not found"}), 404
     return _run_single_shot_import(
         user, "codeforces", ci.fetch_codeforces, user.get("cf_handle", ""),
-        "No Codeforces handle configured. Add one in Settings first."
+        "No Codeforces handle configured. Add one in Settings first.",
+        imported_column="cf_imported",
     )
 
 
@@ -302,7 +344,8 @@ def import_atcoder():
         return jsonify({"success": False, "message": "User not found"}), 404
     return _run_single_shot_import(
         user, "atcoder", ci.fetch_atcoder, user.get("ac_handle", ""),
-        "No AtCoder handle configured. Add one in Settings first."
+        "No AtCoder handle configured. Add one in Settings first.",
+        imported_column="ac_imported",
     )
 
 
@@ -425,6 +468,13 @@ def import_leetcode():
         )
         db.commit()
 
+    # Only meaningful once this chunk actually finished the FULL first-time
+    # LeetCode history (has_more:false, lc_imported just set to 1 above) —
+    # AND persisted CF/AtCoder imports have also each succeeded at least
+    # once. Never true on a partial chunk or a failed call, and never true
+    # just because LeetCode alone finished.
+    initial_import_completed = _recompute_initial_import_completed(user_id) if not has_more else False
+
     elapsed = time.time() - t_start
     print(f"[LEETCODE] IMPORT COMPLETED status={'partial' if has_more else 'completed'}")
     print("=" * 50)
@@ -438,11 +488,7 @@ def import_leetcode():
         "sheet_rows_written": sheet_rows_written,
         "next_offset": next_offset,
         "has_more": has_more,
-        # True only on the call that actually finished the FULL first-time
-        # history (has_more:false) — the same condition under which
-        # lc_imported was just set to 1 above. Never true on a partial
-        # chunk or a failed call.
-        "initial_import_completed": not has_more,
+        "initial_import_completed": initial_import_completed,
         "execution_time_seconds": round(elapsed, 2),
     }
     if fetch_error:

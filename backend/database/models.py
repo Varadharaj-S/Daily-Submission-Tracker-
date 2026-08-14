@@ -46,6 +46,9 @@ class User:
     lc_import_status: str = ""
     lc_import_offset: int = 0               # LeetCode submissions-API offset to resume /import_leetcode from
     lc_import_has_more: int = 1             # 0 once the first full LeetCode import has walked all pages
+    cf_imported: int = 0                    # 1 once /import_codeforces has ever succeeded for this user
+    ac_imported: int = 0                    # 1 once /import_atcoder has ever succeeded for this user
+    initial_import_completed: int = 0       # 1 only once cf_imported AND ac_imported AND lc_imported are all 1
 
 
 @dataclass

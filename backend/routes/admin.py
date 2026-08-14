@@ -635,7 +635,19 @@ def admin_reset_lc(uid):
         u = db.execute("SELECT username FROM users WHERE id=%s", (uid,)).fetchone()
 
         if u:
-            db.execute("UPDATE users SET lc_imported=0 WHERE id=%s", (uid,))
+            # Reset must cover every flag Import LC's completion state now
+            # depends on (see routes/sync.py), not just lc_imported — else
+            # initial_import_completed would stay 1 and the button would
+            # never reappear for this user after an admin reset.
+            db.execute(
+                """UPDATE users
+                   SET lc_imported=0, cf_imported=0, ac_imported=0,
+                       initial_import_completed=0,
+                       lc_import_offset=0, lc_import_has_more=1,
+                       lc_import_status=''
+                   WHERE id=%s""",
+                (uid,),
+            )
             db.commit()
             log_admin("reset_lc_import", u["username"])
     return jsonify({"ok": True})

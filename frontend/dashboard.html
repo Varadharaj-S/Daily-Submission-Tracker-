@@ -42,11 +42,17 @@ const platformCls = p => (p || "").toLowerCase().replace("codeforces", "cf").rep
 let DASH;
 
 /* ── Import LC ───────────────────────────────────────────────────────
-   The "Import LC" button calls importLeetCode() (defined in
-   assets/js/main.js), which POSTs once to /import_lc and then polls
-   GET /import_lc/status every 8s until the worker (bot_sheet_sync.py)
-   reports completed/failed. See routes/sync.py, routes/internal.py,
-   and backend/bot_sheet_sync.py.
+   One button, one frontend function: the "Import LC" button calls
+   importLC() (defined in assets/js/main.js), which drives
+   POST /import_codeforces -> POST /import_atcoder -> POST /import_leetcode
+   (looped, one request per resumable chunk) as separate short-lived
+   requests, showing a live popup that only updates from each request's
+   real response. No polling, no /import_lc/status, no background job.
+   Visibility of this button is gated on user.initial_import_completed,
+   which the backend persists per-user (see routes/sync.py) and only
+   sets once Codeforces + AtCoder + the FULL LeetCode history have all
+   actually succeeded — so it stays correct across refresh, logout/
+   login, and other devices.
 ──────────────────────────────────────────────────────────────────── */
 
 async function sendFeedback() {
@@ -87,9 +93,9 @@ function renderDashboard() {
         <span id="syncLabel">⚡ Sync Now</span>
         <span id="syncSpinner" class="spinner" style="display:none"></span>
       </button>
-      ${!user.lc_imported ? `
-      <button id="importLcBtn" class="btn btn-import" onclick="importLeetCode()">
-        <span id="importLcLabel">📥 Import LC${user.lc_import_offset ? " (resume)" : ""}</span>
+      ${!user.initial_import_completed ? `
+      <button id="importLcBtn" class="btn btn-import" onclick="importLC()">
+        <span id="importLcLabel">📥 Import LC${(user.lc_import_offset || user.cf_imported || user.ac_imported) ? " (resume)" : ""}</span>
         <span id="importLcSpinner" class="spinner" style="display:none"></span>
       </button>
       <div id="importStatus" style="display:none;margin-top:.6rem;font-size:.85rem;color:#94a3b8;line-height:1.5;max-width:340px;"></div>` : `
@@ -126,8 +132,12 @@ function renderDashboard() {
   <div class="workflow-grid">
     <div class="workflow-card workflow-import">
       <div class="workflow-head"><span class="workflow-step">1</span><h3>Import</h3></div>
-      <p>A one-click full LeetCode history import (Codeforces and AtCoder are picked up automatically too). Updates the database and your sheet.</p>
-      <div class="workflow-meta"><span class="pill">${user.lc_imported ? "LeetCode: Done" : (user.lc_import_offset ? "LeetCode: In progress" : "LeetCode: Pending")}</span></div>
+      <p>One click runs Codeforces, then AtCoder, then your full LeetCode history (as resumable chunks) — updating the database and your sheet as each step actually completes.</p>
+      <div class="workflow-meta">
+        <span class="pill">${user.cf_imported ? "Codeforces: Done" : "Codeforces: Pending"}</span>
+        <span class="pill">${user.ac_imported ? "AtCoder: Done" : "AtCoder: Pending"}</span>
+        <span class="pill">${user.lc_imported ? "LeetCode: Done" : (user.lc_import_offset ? "LeetCode: In progress" : "LeetCode: Pending")}</span>
+      </div>
     </div>
     <div class="workflow-card workflow-auto">
       <div class="workflow-head"><span class="workflow-step">2</span><h3>Auto Sync</h3></div>
@@ -372,7 +382,7 @@ function renderDashboard() {
   {
     const _btns = document.querySelectorAll("#importLcBtn");
     if (_btns.length === 1) console.log("[IMPORT LC] BUTTON FOUND");
-    else if (_btns.length === 0) console.log("[IMPORT LC] button not rendered this load (lc_imported =", !!user.lc_imported, ")");
+    else if (_btns.length === 0) console.log("[IMPORT LC] button not rendered this load (initial_import_completed =", !!user.initial_import_completed, ")");
     else console.error("[IMPORT LC] DUPLICATE BUTTONS FOUND:", _btns.length);
   }
 

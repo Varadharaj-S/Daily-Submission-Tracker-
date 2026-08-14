@@ -433,6 +433,23 @@ def ensure_db_columns():
         # never reset to 0 except by a genuinely fresh/first import.
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS lc_import_offset INTEGER DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS lc_import_has_more INTEGER DEFAULT 1",
+        # One-click "Import LC" orchestrator (see routes/sync.py,
+        # sync/chunked_import.py, assets/js/main.js importLC()) drives
+        # /import_codeforces -> /import_atcoder -> /import_leetcode (chunked)
+        # as three+ separate requests. cf_imported/ac_imported are the same
+        # "has this platform's single-shot import ever succeeded for this
+        # user" flag lc_imported already tracked for LeetCode.
+        # initial_import_completed is the persisted AND of all three — set
+        # server-side only once cf_imported AND ac_imported AND lc_imported
+        # are all 1, never on a partial run. GET /dashboard already does
+        # SELECT * FROM users, so this is exposed to the frontend with no
+        # extra route needed; it's the single source of truth the frontend
+        # uses to decide whether to show the Import LC button, and it
+        # survives refresh/logout/login/new device since it's DB state, not
+        # localStorage.
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS cf_imported INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS ac_imported INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS initial_import_completed INTEGER DEFAULT 0",
         # Pre-existing gap found while testing the new import endpoints
         # against a freshly-provisioned DB: bot_sheet_sync.py's INSERT
         # (and the identical INSERT in the new sync/chunked_import.py,
