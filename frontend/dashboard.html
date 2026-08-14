@@ -98,17 +98,17 @@ function renderDashboard() {
         <span id="syncLabel">⚡ Sync Now</span>
         <span id="syncSpinner" class="spinner" style="display:none"></span>
       </button>
+      ${!user.lc_imported ? `
       <button id="importLcBtn" class="btn btn-import" onclick="importLC()">
         <span id="importLcLabel">📥 Import LC${user.lc_import_offset ? " (resume)" : ""}</span>
         <span id="importLcSpinner" class="spinner" style="display:none"></span>
       </button>
-      <div id="importStatus" style="display:none;margin-top:.6rem;font-size:.85rem;color:#94a3b8;line-height:1.5;max-width:340px;"></div>
-      ${user.lc_imported ? `
+      <div id="importStatus" style="display:none;margin-top:.6rem;font-size:.85rem;color:#94a3b8;line-height:1.5;max-width:340px;"></div>` : `
         <div class="feedback-card">
           <h3>⭐ Feedback</h3>
           <textarea id="feedbackText" rows="4" placeholder="Tell us about your experience..." class="form-input"></textarea>
           <button onclick="sendFeedback()" class="btn btn-primary">Send Feedback</button>
-        </div>` : ""}
+        </div>`}
       ${sheet_url ? `<a href="${sheet_url}" target="_blank" class="btn btn-outline">📊 Open Sheet</a>` : ""}
       <a href="#" onclick="openMySheet();return false;" class="btn btn-outline" title="Open your tab in the shared Google Sheet">📄 My Sheet</a>
       <a href="daily_tracker.html" class="btn btn-outline">📘 Daily Tracker</a>

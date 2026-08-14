@@ -438,6 +438,11 @@ def import_leetcode():
         "sheet_rows_written": sheet_rows_written,
         "next_offset": next_offset,
         "has_more": has_more,
+        # True only on the call that actually finished the FULL first-time
+        # history (has_more:false) — the same condition under which
+        # lc_imported was just set to 1 above. Never true on a partial
+        # chunk or a failed call.
+        "initial_import_completed": not has_more,
         "execution_time_seconds": round(elapsed, 2),
     }
     if fetch_error:
