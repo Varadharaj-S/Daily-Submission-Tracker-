@@ -161,7 +161,9 @@ def init_db():
             lc_imported       INTEGER DEFAULT 0,
             auto_sync_enabled INTEGER DEFAULT 1,
             sync_time         TEXT DEFAULT '09:00',
-            lc_import_status  TEXT DEFAULT ''
+            lc_import_status  TEXT DEFAULT '',
+            lc_import_offset  INTEGER DEFAULT 0,
+            lc_import_has_more INTEGER DEFAULT 1
         );
         CREATE TABLE IF NOT EXISTS submissions (
             id           SERIAL PRIMARY KEY,
@@ -423,6 +425,32 @@ def ensure_db_columns():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS roll_no TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS branch TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS lc_import_status TEXT DEFAULT ''",
+        # Chunked /import_leetcode continuation state (see routes/sync.py +
+        # sync/chunked_import.py). lc_import_offset is the LeetCode
+        # submissions-API offset to resume from on the NEXT button press;
+        # lc_import_has_more tracks whether the first full import has
+        # finished walking all pages yet. Reused as-is across requests —
+        # never reset to 0 except by a genuinely fresh/first import.
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS lc_import_offset INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS lc_import_has_more INTEGER DEFAULT 1",
+        # Pre-existing gap found while testing the new import endpoints
+        # against a freshly-provisioned DB: bot_sheet_sync.py's INSERT
+        # (and the identical INSERT in the new sync/chunked_import.py,
+        # which intentionally mirrors it) has always written a
+        # submission_url column that no CREATE TABLE / migration file
+        # ever added — only submitted_at (migration 0005) was. On a DB
+        # created from db.py's own baseline schema this INSERT would
+        # already fail with UndefinedColumn, for the OLD /import_lc too,
+        # not just the new endpoints. Additive, IF NOT EXISTS, no data
+        # loss — same self-healing pattern as every other line here.
+        "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS submission_url TEXT DEFAULT ''",
+        # Same gap as submission_url above, for the same reason:
+        # submitted_at was only ever added via migrations/0005 (the
+        # standalone migrate.py script), never via this unconditional
+        # boot-time patcher — so a DB that only ever ran app.py's startup
+        # (e.g. every Vercel cold start) and never database/migrate.py
+        # would still be missing it, and the same INSERT would 500.
+        "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ",
     ]
     for stmt in stmts:
         try:

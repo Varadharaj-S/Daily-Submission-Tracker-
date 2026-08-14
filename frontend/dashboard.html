@@ -41,13 +41,18 @@
 const platformCls = p => (p || "").toLowerCase().replace("codeforces", "cf").replace("leetcode", "lc").replace("atcoder", "ac");
 let DASH;
 
-/* ── LeetCode Import — ONE synchronous action, no polling ──────────────
-   POST /import_lc blocks until the real CF+AtCoder+LeetCode fetch, dedupe,
-   DB batch write, and Sheet batch write are all actually done, then
-   returns the real final result in one response. See main.js's
-   importLeetCode() (assets/js/main.js) — that is the version that runs;
-   it awaits /import_lc once and shows the real result via showToast (the
-   side-sliding toast in #flashContainer), no separate status endpoint.
+/* ── Import — three independent, single-request actions, no polling ────
+   Each button (Codeforces / AtCoder / LeetCode) sends exactly ONE POST
+   and awaits the real final result — no "started" response, no /status
+   endpoint, no setInterval. This replaces the old combined /import_lc
+   (CF+AtCoder+LeetCode in one request), which could exceed the deployed
+   Vercel function's execution limit and 504 on a first-time LeetCode
+   import. LeetCode now walks its history in bounded chunks server-side
+   (see routes/sync.py /import_leetcode + sync/chunked_import.py); one
+   button press = one chunk. If a chunk still has more history left
+   (has_more:true), the button stays visible so the user can press it
+   again — nothing auto-advances. See main.js's importCodeforces() /
+   importAtCoder() / importLeetCodeChunk().
 ──────────────────────────────────────────────────────────────────── */
 
 async function sendFeedback() {
@@ -88,17 +93,26 @@ function renderDashboard() {
         <span id="syncLabel">⚡ Sync Now</span>
         <span id="syncSpinner" class="spinner" style="display:none"></span>
       </button>
+      <button id="importCfBtn" class="btn btn-import" onclick="importCodeforces()">
+        <span id="importCfLabel">📥 Import Codeforces</span>
+        <span id="importCfSpinner" class="spinner" style="display:none"></span>
+      </button>
+      <button id="importAcBtn" class="btn btn-import" onclick="importAtCoder()">
+        <span id="importAcLabel">📥 Import AtCoder</span>
+        <span id="importAcSpinner" class="spinner" style="display:none"></span>
+      </button>
       ${!user.lc_imported ? `
-        <button id="importLcBtn" class="btn btn-import" onclick="importLeetCode()">
-          <span id="importLcLabel">📥 Import Full LC</span>
+        <button id="importLcBtn" class="btn btn-import" onclick="importLeetCodeChunk()">
+          <span id="importLcLabel">📥 Import LeetCode${user.lc_import_offset ? " (continue)" : ""}</span>
           <span id="importLcSpinner" class="spinner" style="display:none"></span>
-        </button>
-        <div id="importLcStatus" style="display:none;margin-top:.6rem;font-size:.85rem;color:#94a3b8;line-height:1.4;max-width:320px;"></div>` : `
+        </button>` : ""}
+      <div id="importStatus" style="display:none;margin-top:.6rem;font-size:.85rem;color:#94a3b8;line-height:1.4;max-width:320px;"></div>
+      ${user.lc_imported ? `
         <div class="feedback-card">
           <h3>⭐ Feedback</h3>
           <textarea id="feedbackText" rows="4" placeholder="Tell us about your experience..." class="form-input"></textarea>
           <button onclick="sendFeedback()" class="btn btn-primary">Send Feedback</button>
-        </div>`}
+        </div>` : ""}
       ${sheet_url ? `<a href="${sheet_url}" target="_blank" class="btn btn-outline">📊 Open Sheet</a>` : ""}
       <a href="#" onclick="openMySheet();return false;" class="btn btn-outline" title="Open your tab in the shared Google Sheet">📄 My Sheet</a>
       <a href="daily_tracker.html" class="btn btn-outline">📘 Daily Tracker</a>
@@ -126,9 +140,9 @@ function renderDashboard() {
 
   <div class="workflow-grid">
     <div class="workflow-card workflow-import">
-      <div class="workflow-head"><span class="workflow-step">1</span><h3>Import LC</h3></div>
-      <p>First-time LeetCode import using session cookie + CSRF token. Saves all platforms and updates the sheet.</p>
-      <div class="workflow-meta"><span class="pill">${user.lc_imported ? "Done" : "Pending"}</span></div>
+      <div class="workflow-head"><span class="workflow-step">1</span><h3>Import</h3></div>
+      <p>Three separate one-click imports — Codeforces, AtCoder, and LeetCode (in resumable chunks for a first-time full history import). Each updates the database and your sheet.</p>
+      <div class="workflow-meta"><span class="pill">${user.lc_imported ? "LeetCode: Done" : (user.lc_import_offset ? "LeetCode: In progress" : "LeetCode: Pending")}</span></div>
     </div>
     <div class="workflow-card workflow-auto">
       <div class="workflow-head"><span class="workflow-step">2</span><h3>Auto Sync</h3></div>

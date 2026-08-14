@@ -43,6 +43,9 @@ class User:
     lc_imported: int = 0
     auto_sync_enabled: int = 1
     sync_time: str = "09:00"
+    lc_import_status: str = ""
+    lc_import_offset: int = 0               # LeetCode submissions-API offset to resume /import_leetcode from
+    lc_import_has_more: int = 1             # 0 once the first full LeetCode import has walked all pages
 
 
 @dataclass

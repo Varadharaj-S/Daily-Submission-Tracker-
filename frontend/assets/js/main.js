@@ -61,55 +61,92 @@ async function triggerSync() {
   }
 }
 
-async function importLeetCode() {
+/* ── Import — three independent single-request actions ─────────────────
+   Each function below sends exactly ONE POST to its own endpoint and
+   awaits the real final JSON result. No polling, no setInterval, no
+   "started" response, no automatic follow-up request. For LeetCode,
+   has_more:true just means the button stays enabled so the user can
+   press it again for the next chunk — nothing here calls it again on
+   its own. ──────────────────────────────────────────────────────── */
+
+async function _runImport({ endpoint, btnId, labelId, spinnerId, defaultLabel, confirmMsg, reloadOnDone }) {
   if (window.importRunning) return;
   window.importRunning = true;
 
-  const btn     = document.getElementById("importLcBtn");
-  const label   = document.getElementById("importLcLabel");
-  const spinner = document.getElementById("importLcSpinner");
-  const status  = document.getElementById("syncStatus");
+  const btn     = document.getElementById(btnId);
+  const label   = document.getElementById(labelId);
+  const spinner = document.getElementById(spinnerId);
+  const status  = document.getElementById("importStatus");
 
-  if (!btn) {
-    window.importRunning = false;
-    return;
-  }
+  if (!btn) { window.importRunning = false; return; }
 
-  if (!confirm("This will import your full LeetCode history, update Google Sheet, and then disable this button. Continue?")) {
+  if (confirmMsg && !confirm(confirmMsg)) {
     window.importRunning = false;
     return;
   }
 
   btn.disabled = true;
-  if (label) label.style.display = "none";
   if (spinner) spinner.style.display = "inline-block";
   if (status) {
     status.style.display = "block";
     status.className = "sync-status";
-    status.textContent = "Importing full history...";
+    status.textContent = "Working...";
   }
 
   try {
-    const res = await fetch(BASE_API_URL + "/import_lc", { method: "POST", credentials: "include" });
+    const res = await fetch(BASE_API_URL + endpoint, { method: "POST", credentials: "include" });
     const data = await res.json();
+
     if (status) {
       status.className = "sync-status " + (data.success ? "sync-ok" : "sync-err");
-      status.textContent = data.message || (data.success ? "Import completed ✅" : "Import failed");
+      status.textContent = data.message || (data.success ? "Done ✅" : "Failed");
     }
-    showToast(data.message || (data.success ? "Import completed ✅" : "Import failed"), data.success ? "success" : "error");
-    if (data.success) {
-      setTimeout(() => location.reload(), 5000);
+    showToast(data.message || (data.success ? "Done ✅" : "Failed"), data.success ? "success" : "error");
+
+    if (data.success && reloadOnDone && !data.has_more) {
+      setTimeout(() => location.reload(), 3000);
     } else {
       btn.disabled = false;
+      // For a partial LeetCode chunk, relabel the button so it's clear
+      // pressing it again continues from where it left off — the user
+      // must press it; nothing here does that automatically.
+      if (label && data.has_more) label.textContent = defaultLabel + " (continue)";
     }
   } catch {
     showToast("Network error — please try again.", "error");
     btn.disabled = false;
   } finally {
-    if (label) label.style.display = "inline";
     if (spinner) spinner.style.display = "none";
     window.importRunning = false;
   }
+}
+
+async function importCodeforces() {
+  return _runImport({
+    endpoint: "/import_codeforces",
+    btnId: "importCfBtn", labelId: "importCfLabel", spinnerId: "importCfSpinner",
+    defaultLabel: "📥 Import Codeforces",
+    reloadOnDone: true,
+  });
+}
+
+async function importAtCoder() {
+  return _runImport({
+    endpoint: "/import_atcoder",
+    btnId: "importAcBtn", labelId: "importAcLabel", spinnerId: "importAcSpinner",
+    defaultLabel: "📥 Import AtCoder",
+    reloadOnDone: true,
+  });
+}
+
+async function importLeetCodeChunk() {
+  return _runImport({
+    endpoint: "/import_leetcode",
+    btnId: "importLcBtn", labelId: "importLcLabel", spinnerId: "importLcSpinner",
+    defaultLabel: "📥 Import LeetCode",
+    confirmMsg: "This imports one chunk of your LeetCode history (continuing from where you left off) and updates your sheet. Press it again afterwards if more history remains. Continue?",
+    reloadOnDone: true,
+  });
 }
 
 async function toggleAutoSync() {
