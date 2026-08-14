@@ -41,18 +41,23 @@
 const platformCls = p => (p || "").toLowerCase().replace("codeforces", "cf").replace("leetcode", "lc").replace("atcoder", "ac");
 let DASH;
 
-/* ── Import — three independent, single-request actions, no polling ────
-   Each button (Codeforces / AtCoder / LeetCode) sends exactly ONE POST
-   and awaits the real final result — no "started" response, no /status
-   endpoint, no setInterval. This replaces the old combined /import_lc
-   (CF+AtCoder+LeetCode in one request), which could exceed the deployed
-   Vercel function's execution limit and 504 on a first-time LeetCode
-   import. LeetCode now walks its history in bounded chunks server-side
-   (see routes/sync.py /import_leetcode + sync/chunked_import.py); one
-   button press = one chunk. If a chunk still has more history left
-   (has_more:true), the button stays visible so the user can press it
-   again — nothing auto-advances. See main.js's importCodeforces() /
-   importAtCoder() / importLeetCodeChunk().
+/* ── Import LC — ONE button, THREE independent backend requests ────────
+   The UI exposes a single "Import LC" button. Under the hood it awaits
+   three separate single-purpose endpoints in strict order — CF, then
+   AtCoder, then LeetCode — each its own real HTTP request/response, no
+   combined backend request and no /status polling:
+
+     POST /import_codeforces  (one shot)
+     POST /import_atcoder     (one shot)
+     POST /import_leetcode    (one chunk; auto-repeated by main.js's
+                                importLC() while has_more:true, using the
+                                offset already persisted server-side —
+                                never restarts at 0, never a setInterval)
+
+   This is what replaced the old combined /import_lc (CF+AtCoder+LC in
+   one request), which could exceed the deployed Vercel function's
+   execution limit and 504 on a first-time LeetCode import. See
+   routes/sync.py / sync/chunked_import.py and main.js's importLC().
 ──────────────────────────────────────────────────────────────────── */
 
 async function sendFeedback() {
@@ -93,20 +98,11 @@ function renderDashboard() {
         <span id="syncLabel">⚡ Sync Now</span>
         <span id="syncSpinner" class="spinner" style="display:none"></span>
       </button>
-      <button id="importCfBtn" class="btn btn-import" onclick="importCodeforces()">
-        <span id="importCfLabel">📥 Import Codeforces</span>
-        <span id="importCfSpinner" class="spinner" style="display:none"></span>
+      <button id="importLcBtn" class="btn btn-import" onclick="importLC()">
+        <span id="importLcLabel">📥 Import LC${user.lc_import_offset ? " (resume)" : ""}</span>
+        <span id="importLcSpinner" class="spinner" style="display:none"></span>
       </button>
-      <button id="importAcBtn" class="btn btn-import" onclick="importAtCoder()">
-        <span id="importAcLabel">📥 Import AtCoder</span>
-        <span id="importAcSpinner" class="spinner" style="display:none"></span>
-      </button>
-      ${!user.lc_imported ? `
-        <button id="importLcBtn" class="btn btn-import" onclick="importLeetCodeChunk()">
-          <span id="importLcLabel">📥 Import LeetCode${user.lc_import_offset ? " (continue)" : ""}</span>
-          <span id="importLcSpinner" class="spinner" style="display:none"></span>
-        </button>` : ""}
-      <div id="importStatus" style="display:none;margin-top:.6rem;font-size:.85rem;color:#94a3b8;line-height:1.4;max-width:320px;"></div>
+      <div id="importStatus" style="display:none;margin-top:.6rem;font-size:.85rem;color:#94a3b8;line-height:1.5;max-width:340px;"></div>
       ${user.lc_imported ? `
         <div class="feedback-card">
           <h3>⭐ Feedback</h3>

@@ -39,7 +39,7 @@ async function triggerSync() {
   if (status) status.style.display = "none";
 
   try {
-    const res = await fetch("/sync", { method: "POST" });
+    const res = await fetch(BASE_API_URL + "/sync", { method: "POST", credentials: "include" });
     if (res.status === 429) {
       showToast("Rate limit — please wait a moment.", "error");
       return;
@@ -61,52 +61,136 @@ async function triggerSync() {
   }
 }
 
-async function importLeetCode() {
+/* ── Import LC — ONE button, THREE real sequential backend requests ────
+   importLC() is the entire workflow behind the single "Import LC"
+   button. It performs, IN ORDER, awaiting each real HTTP response
+   before starting the next:
+
+     1) POST /import_codeforces   (one request, real result)
+     2) POST /import_atcoder      (one request, real result)
+     3) POST /import_leetcode     (one request per chunk; looped here
+        while the real response says has_more:true, using the offset
+        the backend already persisted — never restarted at 0)
+
+   This is NOT status polling: every call in the loop is a genuine
+   import request that processes the next data chunk and returns a
+   real result (fetched/written counts), never a bare {"status":
+   "started"}. There is no setInterval and no /status endpoint.
+
+   If Codeforces or AtCoder fails, the whole workflow stops immediately
+   and the real error is shown — AtCoder/LeetCode never start. If a
+   LeetCode chunk fails, the loop stops at that chunk; the backend
+   never advanced lc_import_offset for the failed chunk, so pressing
+   Import LC again retries safely from the same position (after CF/AC
+   re-run, since CF/AtCoder/LeetCode always run in that fixed order).
+──────────────────────────────────────────────────────────────────── */
+
+function _importLog(lines, status) {
+  if (!status) return;
+  status.style.display = "block";
+  status.className = "sync-status";
+  status.innerHTML = lines.map(l => `<div>${l}</div>`).join("");
+}
+
+async function importLC() {
   if (window.importRunning) return;
   window.importRunning = true;
 
   const btn     = document.getElementById("importLcBtn");
   const label   = document.getElementById("importLcLabel");
   const spinner = document.getElementById("importLcSpinner");
-  const status  = document.getElementById("syncStatus");
+  const status  = document.getElementById("importStatus");
+  if (!btn) { window.importRunning = false; return; }
 
-  if (!btn) {
-    window.importRunning = false;
-    return;
-  }
-
-  if (!confirm("This will import your full LeetCode history, update Google Sheet, and then disable this button. Continue?")) {
+  if (!confirm("This imports your Codeforces, AtCoder, and LeetCode history (in that order) and updates your sheet. Continue?")) {
     window.importRunning = false;
     return;
   }
 
   btn.disabled = true;
-  if (label) label.style.display = "none";
   if (spinner) spinner.style.display = "inline-block";
-  if (status) {
-    status.style.display = "block";
-    status.className = "sync-status";
-    status.textContent = "Importing full history...";
-  }
+
+  const lines = ["Importing..."];
+  _importLog(lines, status);
+
+  const tStart = performance.now();
+  const totals = { cfFetched: 0, cfNew: 0, acFetched: 0, acNew: 0, lcFetched: 0, lcNew: 0 };
+
+  const setLast = (text) => { lines[lines.length - 1] = text; };
 
   try {
-    const res = await fetch("/import_lc", { method: "POST" });
-    const data = await res.json();
-    if (status) {
-      status.className = "sync-status " + (data.success ? "sync-ok" : "sync-err");
-      status.textContent = data.message || (data.success ? "Import started" : "Import failed");
+    // CALL 1/3 — Codeforces (one request, real result)
+    lines.push("Codeforces → Running...");
+    _importLog(lines, status);
+    let res = await fetch(BASE_API_URL + "/import_codeforces", { method: "POST", credentials: "include" });
+    let data = await res.json();
+    if (!data.success) {
+      setLast(`Codeforces → Failed — ${data.message || "unknown error"}`);
+      _importLog(lines, status);
+      showToast(data.message || "Codeforces import failed", "error");
+      return;
     }
-    showToast(data.message || (data.success ? "Import started ✅" : "Import failed"), data.success ? "success" : "error");
-    if (data.success) {
-      setTimeout(() => location.reload(), 5000);
-    } else {
-      btn.disabled = false;
+    totals.cfFetched = data.rows_fetched || 0;
+    totals.cfNew = data.db_rows_written || 0;
+    setLast("Codeforces → Completed");
+    _importLog(lines, status);
+
+    // CALL 2/3 — AtCoder (one request, real result)
+    lines.push("AtCoder → Running...");
+    _importLog(lines, status);
+    res = await fetch(BASE_API_URL + "/import_atcoder", { method: "POST", credentials: "include" });
+    data = await res.json();
+    if (!data.success) {
+      setLast(`AtCoder → Failed — ${data.message || "unknown error"}`);
+      _importLog(lines, status);
+      showToast(data.message || "AtCoder import failed", "error");
+      return;
     }
-  } catch {
+    totals.acFetched = data.rows_fetched || 0;
+    totals.acNew = data.db_rows_written || 0;
+    setLast("AtCoder → Completed");
+    _importLog(lines, status);
+
+    // CALL 3/3 — LeetCode, one real request per chunk, auto-continued
+    // here (not polling — each iteration is a fresh import request that
+    // processes the next saved offset) until has_more is false.
+    let chunkNum = 1;
+    let hasMore = true;
+    while (hasMore) {
+      lines.push(`LeetCode → Chunk ${chunkNum}...`);
+      _importLog(lines, status);
+      res = await fetch(BASE_API_URL + "/import_leetcode", { method: "POST", credentials: "include" });
+      data = await res.json();
+      if (!data.success) {
+        setLast(`LeetCode → Chunk ${chunkNum} failed — ${data.message || "unknown error"}`);
+        _importLog(lines, status);
+        showToast(data.message || "LeetCode import failed", "error");
+        return;
+      }
+      totals.lcFetched += data.rows_fetched || 0;
+      totals.lcNew += data.db_rows_written || 0;
+      hasMore = !!data.has_more;
+      setLast(`LeetCode → Chunk ${chunkNum} (${data.rows_fetched || 0} fetched)`);
+      _importLog(lines, status);
+      chunkNum++;
+    }
+
+    const totalSeconds = ((performance.now() - tStart) / 1000).toFixed(1);
+    lines.push("Import Completed ✅");
+    lines.push(
+      `CF ${totals.cfFetched} fetched / ${totals.cfNew} new · ` +
+      `AC ${totals.acFetched} fetched / ${totals.acNew} new · ` +
+      `LC ${totals.lcFetched} fetched / ${totals.lcNew} new · ${totalSeconds}s total`
+    );
+    _importLog(lines, status);
+    showToast("Import complete ✅", "success");
+    setTimeout(() => location.reload(), 2500);
+  } catch (err) {
+    lines.push("Import failed — network error, please try again");
+    _importLog(lines, status);
     showToast("Network error — please try again.", "error");
-    btn.disabled = false;
   } finally {
-    if (label) label.style.display = "inline";
+    btn.disabled = false;
     if (spinner) spinner.style.display = "none";
     window.importRunning = false;
   }
@@ -116,8 +200,9 @@ async function toggleAutoSync() {
   const toggle = document.getElementById("autoSyncToggle");
   if (!toggle) return;
   try {
-    const res = await fetch("/toggle_auto_sync", {
+    const res = await fetch(BASE_API_URL + "/toggle_auto_sync", {
       method: "POST",
+      credentials: "include",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({ enabled: toggle.checked })
     });
@@ -133,8 +218,9 @@ async function saveSyncTime() {
   const timeInput = document.getElementById("syncTime");
   if (!timeInput) return;
   try {
-    const res = await fetch("/set_sync_time", {
+    const res = await fetch(BASE_API_URL + "/set_sync_time", {
       method: "POST",
+      credentials: "include",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({ time: timeInput.value })
     });
@@ -146,7 +232,7 @@ async function saveSyncTime() {
 }
 
 async function runSync() {
-    const res = await fetch("/sync", { method: "POST" });
+    const res = await fetch(BASE_API_URL + "/sync", { method: "POST", credentials: "include" });
     const data = await res.json();
 
     document.getElementById("new-count").innerText =
@@ -179,7 +265,7 @@ function togglePwd(id, btn) {
 }
 
 async function completeChallenge(id) {
-  const res = await fetch(`/challenge/complete/${id}`, { method: "POST" });
+  const res = await fetch(`${BASE_API_URL}/challenge/complete/${id}`, { method: "POST", credentials: "include" });
   const data = await res.json();
   if (data.success) {
     const el = document.getElementById(`ch-${id}`);
@@ -193,7 +279,7 @@ async function completeChallenge(id) {
 }
 
 async function completeMentor(id) {
-  const res = await fetch(`/mentor/complete/${id}`, { method: "POST" });
+  const res = await fetch(`${BASE_API_URL}/mentor/complete/${id}`, { method: "POST", credentials: "include" });
   const data = await res.json();
   if (data.success) {
     const el = document.getElementById(`mt-${id}`);
@@ -226,3 +312,26 @@ document.querySelectorAll(".nav-link").forEach(l =>
     document.getElementById("navLinks")?.classList.remove("open")
   )
 );
+
+/* ── Generic client-side pagination helpers ─────────────────────────────
+   Reused by admin.html / mentor.html so every long list (users, logs,
+   student progress, assignments, search results) is paginated the same
+   way instead of dumping everything on one page. */
+function paginateArray(arr, page, perPage) {
+  arr = arr || [];
+  const total = arr.length;
+  const total_pages = Math.max(1, Math.ceil(total / perPage));
+  page = Math.min(Math.max(1, page || 1), total_pages);
+  const start = (page - 1) * perPage;
+  return { items: arr.slice(start, start + perPage), page, total_pages, total };
+}
+
+function paginationHTML(page, total_pages, onClickFn, extraArgs = "") {
+  if (total_pages <= 1) return "";
+  const args = extraArgs ? extraArgs + "," : "";
+  return `<div class="pagination">
+    <button class="page-btn" ${page <= 1 ? "disabled style='opacity:.4;cursor:default'" : ""} onclick="${onClickFn}(${args}${page - 1})">← Prev</button>
+    <span class="page-info mono">Page ${page} / ${total_pages}</span>
+    <button class="page-btn" ${page >= total_pages ? "disabled style='opacity:.4;cursor:default'" : ""} onclick="${onClickFn}(${args}${page + 1})">Next →</button>
+  </div>`;
+}
