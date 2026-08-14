@@ -110,4 +110,4 @@ if __name__ == "__main__":
     if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         start_sync_worker()
 
-    app.run(debug=True)
+    # app.run(debug=True)
