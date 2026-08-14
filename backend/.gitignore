@@ -8,4 +8,9 @@ dsa_tracker.db
 dsa_tracker.db-shm
 dsa_tracker.db-wal
 CLAUDE.md
+
+# Ignore JSON by default (this is where the Google service-account
+# credentials file and local caches live) but explicitly keep real
+# deployment config that must be tracked in git.
 *.json
+!vercel.json

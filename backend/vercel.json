@@ -1,0 +1,25 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "backend/app.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "backend/app.py"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/contest-sync",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/daily-sync",
+      "schedule": "30 3 * * *"
+    }
+  ]
+}

@@ -1,14 +1,16 @@
 """
 routes/internal.py — Internal endpoints only reachable from within the
-Render deployment (or via a shared secret). NOT exposed to the public.
+persistent worker deployment (Render — see render.yaml / Procfile), or via
+a shared secret. NOT exposed to the public.
 
 These endpoints allow the Vercel serverless layer to delegate long-running
 work (like a full LeetCode import) to the Render persistent backend, so the
 Vercel request can return immediately and avoid a 504.
 
-Security: every request must carry the correct INTERNAL_SECRET header.
-Set INTERNAL_SECRET to a long random string in both your Vercel and Render
-environment variable panels.
+Security: every request must carry the correct Config.INTERNAL_TASK_SECRET
+value in the X-Internal-Secret header. Set INTERNAL_TASK_SECRET to the same
+long random string in both your Vercel and Render environment variable
+panels (see config.py — this is the single source of truth for the name).
 """
 
 import os
@@ -18,14 +20,15 @@ from flask import request, jsonify
 
 from extensions import app
 from database.db import get_db
+from config import Config
 
 
 def _require_internal_secret():
     """Returns (True, None) if the request is authorized, (False, response) otherwise."""
-    secret = os.environ.get("INTERNAL_SECRET", "")
+    secret = Config.INTERNAL_TASK_SECRET
     if not secret:
         # No secret configured → deny all; don't let this endpoint be open.
-        return False, (jsonify({"ok": False, "error": "INTERNAL_SECRET not configured"}), 403)
+        return False, (jsonify({"ok": False, "error": "INTERNAL_TASK_SECRET not configured"}), 403)
 
     provided = request.headers.get("X-Internal-Secret", "")
     if provided != secret:

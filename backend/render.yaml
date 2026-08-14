@@ -6,6 +6,15 @@
 #   2. Go to dashboard.render.com → New → Blueprint → connect your repo.
 #   3. Render reads this file and creates the web service + cron job + DB.
 #   4. Set the environment variables marked (sync manually in Render dashboard).
+#
+# Vercel-side config (NOT declared here — set manually in the Vercel project's
+# Environment Variables panel):
+#   WORKER_BACKEND_URL   = this Render web service's public URL
+#                           (e.g. https://dsa-tracker.onrender.com)
+#   INTERNAL_TASK_SECRET = same value as INTERNAL_TASK_SECRET below
+# Without both of those set on Vercel, /import_lc and the cron delegation
+# routes fall back to running the job in the Vercel serverless request
+# itself, which is what caused the original 504s — see routes/sync.py.
 ################################################################################
 
 services:
@@ -47,7 +56,16 @@ services:
         sync: false                    # sender address, usually same as SMTP_USER
 
       - key: APP_URL
-        sync: false                    # e.g. https://dsa-tracker.onrender.com
+        sync: false                    # e.g. https://dsa-tracker.onrender.com — used by
+                                        # services/email_service.py for verification-link URLs only
+
+      - key: INTERNAL_TASK_SECRET
+        sync: false                    # shared secret verifying calls from the Vercel deployment
+                                        # to /internal/* routes (routes/internal.py). Must match the
+                                        # same value set in the Vercel project's INTERNAL_TASK_SECRET.
+                                        # WORKER_BACKEND_URL is NOT set here — this service IS the
+                                        # worker, so routes/sync.py + routes/cron.py fall back to
+                                        # running jobs in-process, which is what we want on Render.
 
   # ── Cron Job (daily sync) ───────────────────────────────────────────────────
   - type: cron

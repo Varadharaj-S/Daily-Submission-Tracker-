@@ -22,7 +22,8 @@ ARCHITECTURE:
   directly. But if it IS called (manual curl, etc.) it runs inline as before.
 
 Security: CRON_SECRET guards against external callers.
-          INTERNAL_SECRET is used for the Render-side internal endpoints.
+          INTERNAL_TASK_SECRET (config.py) is used for the worker-side
+          internal endpoints (routes/internal.py).
 """
 
 import os
@@ -32,6 +33,7 @@ import requests as _requests
 from flask import request, jsonify
 
 from extensions import app
+from config import Config
 
 
 def _check_cron_secret():
@@ -43,16 +45,19 @@ def _check_cron_secret():
     return True
 
 
-def _render_url(path: str) -> str:
-    base = os.environ.get("APP_URL", "http://localhost:5000").rstrip("/")
-    return f"{base}{path}"
+def _worker_url(path: str) -> str:
+    return f"{Config.WORKER_BACKEND_URL.rstrip('/')}{path}"
 
 
 def _internal_headers() -> dict:
     return {
-        "X-Internal-Secret": os.environ.get("INTERNAL_SECRET", ""),
+        "X-Internal-Secret": Config.INTERNAL_TASK_SECRET,
         "Content-Type": "application/json",
     }
+
+
+def _worker_configured() -> bool:
+    return bool(Config.WORKER_BACKEND_URL and Config.INTERNAL_TASK_SECRET)
 
 
 @app.route("/api/cron/daily-sync", methods=["GET", "POST"])
@@ -60,30 +65,25 @@ def cron_daily_sync():
     """
     Called by Vercel Cron (vercel.json schedule).
 
-    On Vercel:  POSTs to Render /internal/cron/daily-sync → returns fast.
-    On Render:  Runs scheduler.main() inline (Render's own cron calls
-                python scheduler.py directly so this branch is rarely hit).
+    When the worker is configured: POSTs to the worker's
+    /internal/cron/daily-sync → returns fast.
+    Otherwise (this process IS the worker — Render's own cron calls
+    `python scheduler.py` directly so this branch is rarely hit there):
+    runs scheduler.main() inline.
     """
     if not _check_cron_secret():
         return jsonify({"ok": False, "message": "Unauthorized"}), 401
 
-    if os.environ.get("VERCEL"):
-        # Delegate to Render — don't run the full sync here.
-        target = _render_url("/internal/cron/daily-sync")
-        secret = os.environ.get("INTERNAL_SECRET", "")
-        if not secret:
-            return jsonify({
-                "ok": False,
-                "message": "INTERNAL_SECRET not set — cannot delegate to Render backend."
-            }), 503
+    if _worker_configured():
+        # Delegate to the persistent worker — don't run the full sync here.
         try:
-            resp = _requests.post(target, headers=_internal_headers(), timeout=10)
+            resp = _requests.post(_worker_url("/internal/cron/daily-sync"), headers=_internal_headers(), timeout=10)
             resp.raise_for_status()
         except Exception as e:
-            return jsonify({"ok": False, "message": f"Render delegation failed: {e}"}), 503
-        return jsonify({"ok": True, "message": "Daily sync delegated to Render backend"})
+            return jsonify({"ok": False, "message": f"Worker delegation failed: {e}"}), 503
+        return jsonify({"ok": True, "message": "Daily sync delegated to worker backend"})
 
-    # Render / local: run inline
+    # This process is the worker (or local dev): run inline
     from scheduler import main as run_daily_sync
     run_daily_sync()
     return jsonify({"ok": True, "message": "Daily sync completed"})
@@ -98,22 +98,15 @@ def cron_contest_sync():
     if not _check_cron_secret():
         return jsonify({"ok": False, "message": "Unauthorized"}), 401
 
-    if os.environ.get("VERCEL"):
-        target = _render_url("/internal/cron/contest-sync")
-        secret = os.environ.get("INTERNAL_SECRET", "")
-        if not secret:
-            return jsonify({
-                "ok": False,
-                "message": "INTERNAL_SECRET not set — cannot delegate to Render backend."
-            }), 503
+    if _worker_configured():
         try:
-            resp = _requests.post(target, headers=_internal_headers(), timeout=10)
+            resp = _requests.post(_worker_url("/internal/cron/contest-sync"), headers=_internal_headers(), timeout=10)
             resp.raise_for_status()
         except Exception as e:
-            return jsonify({"ok": False, "message": f"Render delegation failed: {e}"}), 503
-        return jsonify({"ok": True, "message": "Contest sync delegated to Render backend"})
+            return jsonify({"ok": False, "message": f"Worker delegation failed: {e}"}), 503
+        return jsonify({"ok": True, "message": "Contest sync delegated to worker backend"})
 
-    # Render / local: run inline
+    # This process is the worker (or local dev): run inline
     from contest_scheduler import main as run_contest_sync
     run_contest_sync()
     return jsonify({"ok": True, "message": "Contest sync completed"})

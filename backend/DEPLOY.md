@@ -164,7 +164,9 @@ Next scheduler run syncs normally ✅
 | `SMTP_USER` | Optional | For email verification |
 | `SMTP_PASS` | Optional | Gmail App Password |
 | `FROM_EMAIL` | Optional | Sender address |
-| `APP_URL` | Optional | Base URL for email links |
+| `APP_URL` | Optional | Base URL for email verification links only (services/email_service.py) |
+| `WORKER_BACKEND_URL` | Vercel only | This Render service's public URL (e.g. `https://dsa-tracker.onrender.com`). Lets Vercel's `/import_lc` and cron routes hand off long-running work here instead of timing out. Not needed on Render itself. |
+| `INTERNAL_TASK_SECRET` | Yes, if using the Vercel+Render split | Shared secret for the `X-Internal-Secret` header on `/internal/*` routes (routes/internal.py). Must be set to the same value on both the Vercel and Render deployments. |
 
 ---
 

@@ -10,19 +10,33 @@ to in-process). That subprocess hammers LC's GraphQL API hundreds of times
 with 0.35 s sleeps between requests, easily taking 5–15 minutes for a large
 account — way past Vercel's ~10 s serverless timeout.
 
-NEW FLOW:
+FLOW:
   POST /import_lc          (Vercel)
     → validate session
-    → POST to Render /internal/trigger_import   (fire-and-forget via requests)
+    → POST to the persistent worker's /internal/trigger_import
+      (fire-and-forget via requests, short timeout — we only wait for the ACK)
     → return {"success": true, "status": "started"} immediately
 
   GET /import_lc/status    (Vercel)
-    → GET Render /internal/import_status/<user_id>
+    → GET worker's /internal/import_status/<user_id>
     → forward result to frontend (for poll loop)
 
 The actual import still runs in bot_sheet_sync.py — nothing about the
 import logic itself changes. It just moves from "inside the Vercel request"
-to "background thread on the Render persistent backend".
+to "background thread on the persistent worker backend" (Render — see
+render.yaml / Procfile).
+
+CONFIG (single source of truth: config.py's Config class):
+  WORKER_BACKEND_URL  — base URL of the persistent worker (Render), e.g.
+                         https://dsa-tracker.onrender.com
+  INTERNAL_TASK_SECRET — shared secret for the X-Internal-Secret header,
+                         must match on both the Vercel and Render deployments.
+
+Whenever BOTH are configured we delegate to the worker (this is what makes
+production on Vercel work without a 504). When either is missing — i.e. this
+process *is* the persistent worker (Render) or we're running locally — we
+run the import in-process via a background thread, same as before this
+handoff existed.
 """
 
 import os
@@ -35,25 +49,23 @@ from extensions import app
 from database.db import get_db
 from utils.decorators import login_required, verified_required
 from services.sync_engine import sync_user_data
+from config import Config
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def _render_url(path: str) -> str:
-    """Build a URL pointing at the Render persistent backend.
-    APP_URL must be set to e.g. https://dsa-tracker.onrender.com
-    (no trailing slash).  If it's missing we fall back to the local
-    Flask server so nothing breaks in local dev."""
-    base = os.environ.get("APP_URL", "http://localhost:5000").rstrip("/")
-    return f"{base}{path}"
-
-
-def _internal_secret() -> str:
-    return os.environ.get("INTERNAL_SECRET", "")
+def _worker_url(path: str) -> str:
+    """Build a URL pointing at the persistent worker backend (Config.WORKER_BACKEND_URL,
+    no trailing slash). Only called when that value is already known to be set."""
+    return f"{Config.WORKER_BACKEND_URL.rstrip('/')}{path}"
 
 
 def _internal_headers() -> dict:
-    return {"X-Internal-Secret": _internal_secret(), "Content-Type": "application/json"}
+    return {"X-Internal-Secret": Config.INTERNAL_TASK_SECRET, "Content-Type": "application/json"}
+
+
+def _worker_configured() -> bool:
+    return bool(Config.WORKER_BACKEND_URL and Config.INTERNAL_TASK_SECRET)
 
 
 # ── /sync (manual incremental sync) ──────────────────────────────────────────
@@ -88,11 +100,12 @@ def import_lc():
     """
     Triggers a full LeetCode import WITHOUT keeping the Vercel request open.
 
-    On Vercel:  POSTs to Render's /internal/trigger_import and returns
-                immediately with {"success": true, "status": "started"}.
+    When the worker is configured (Config.WORKER_BACKEND_URL + Config.INTERNAL_TASK_SECRET
+    both set): POSTs to the worker's /internal/trigger_import and returns
+    immediately with {"success": true, "status": "started"}.
 
-    On Render / local: falls back to the original background-thread behavior
-                (run_background still works fine on a persistent process).
+    Otherwise (this process IS the persistent worker — Render — or local dev):
+    falls back to running the import in a background thread in-process.
     """
     with get_db() as db:
         user = db.execute(
@@ -103,26 +116,25 @@ def import_lc():
         return jsonify({"success": False, "message": "Connect LeetCode first"})
 
     user_id = current_user.id
-    secret  = _internal_secret()
 
-    if os.environ.get("VERCEL") and secret:
-        # ── Vercel path: delegate to Render, return immediately ──────────
-        render_trigger = _render_url("/internal/trigger_import")
+    if _worker_configured():
+        # ── Delegate to the persistent worker, return immediately ────────
         try:
             resp = _requests.post(
-                render_trigger,
+                _worker_url("/internal/trigger_import"),
                 json={"user_id": user_id},
                 headers=_internal_headers(),
                 timeout=10          # we only wait for the ACK, not the import
             )
             resp.raise_for_status()
         except Exception as e:
-            print(f"[import_lc] could not reach Render backend: {e}")
+            print(f"[import_lc] could not reach worker backend: {e}")
             return jsonify({
                 "success": False,
                 "message": (
                     "Could not reach the import worker. "
-                    "Make sure APP_URL and INTERNAL_SECRET are set correctly."
+                    "Make sure WORKER_BACKEND_URL and INTERNAL_TASK_SECRET "
+                    "are set correctly (and match) on both deployments."
                 )
             }), 503
 
@@ -137,10 +149,9 @@ def import_lc():
         })
 
     else:
-        # ── Render / local path: original fire-and-forget thread ─────────
+        # ── This process is the worker (or local dev): run in-process ────
         # (run_background uses a daemon thread here — the process stays alive)
         from utils.helpers import run_background
-        import subprocess, sys
 
         def _do_import(uid):
             import subprocess, sys, os
@@ -168,20 +179,19 @@ def import_lc_status():
     Returns the current import status for the logged-in user.
     Frontend polls this endpoint after pressing Import LC.
 
-    On Vercel: proxies the request to Render's /internal/import_status.
-    On Render / local: reads lc_import_status directly from the DB.
+    When the worker is configured: proxies the request to the worker's
+    /internal/import_status/<user_id>. Otherwise reads lc_import_status
+    directly from the DB (this process IS the worker, or local dev).
 
     Possible statuses: queued | running | completed | failed | unknown
     """
     user_id = current_user.id
-    secret  = _internal_secret()
 
-    if os.environ.get("VERCEL") and secret:
-        # ── Vercel path: ask Render ───────────────────────────────────────
-        render_status = _render_url(f"/internal/import_status/{user_id}")
+    if _worker_configured():
+        # ── Ask the worker ─────────────────────────────────────────────────
         try:
             resp = _requests.get(
-                render_status,
+                _worker_url(f"/internal/import_status/{user_id}"),
                 headers=_internal_headers(),
                 timeout=8
             )
@@ -197,7 +207,7 @@ def import_lc_status():
         })
 
     else:
-        # ── Render / local path: read from DB directly ────────────────────
+        # ── This process is the worker (or local dev): read from DB ───────
         with get_db() as db:
             row = db.execute(
                 "SELECT lc_import_status, lc_imported FROM users WHERE id=%s",
