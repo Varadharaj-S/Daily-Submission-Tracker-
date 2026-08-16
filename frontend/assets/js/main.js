@@ -5,16 +5,63 @@ function showToast(msg, type = "success") {
   if (!c) return;
   const t = document.createElement("div");
   t.className = `toast toast-${type}`;
-  t.innerHTML = `<span class="toast-icon">${type==="success"?"✓":type==="warning"?"⚠":"✕"}</span>
+  const icon = type === "success" ? "✓" : type === "warning" ? "⚠" : type === "autosync" ? "🔄" : "✕";
+  t.innerHTML = `<span class="toast-icon">${icon}</span>
     <span class="toast-msg">${msg}</span>
     <button class="toast-close" onclick="this.parentElement.remove()">×</button>`;
   c.appendChild(t);
+  // autosync popups stay up a little longer than a routine action toast,
+  // since the user wasn't the one who triggered the event and may not be
+  // looking right at the corner of the screen when it appears.
+  const life = type === "autosync" ? 7000 : 4500;
   setTimeout(() => {
     t.style.transition = "opacity .4s, transform .4s";
     t.style.opacity = "0";
     t.style.transform = "translateX(110%)";
     setTimeout(() => t.remove(), 400);
-  }, 4500);
+  }, life);
+}
+
+/* ── Auto-sync dashboard popup ─────────────────────────────────────────
+   The scheduler (scheduler.py / services/scheduler_service.py) writes a
+   sync_logs row with source='auto' whenever it syncs a user in the
+   background, at whatever time the user picked in Settings > Auto Sync
+   Time. This polls for that and pops a toast the first time it sees a
+   given auto-sync event — deduped per browser via localStorage so it
+   doesn't re-announce the same sync on every page load/refresh.
+──────────────────────────────────────────────────────────────────── */
+function _autoSyncSeenKey() {
+  return `dsa_autosync_seen_${(window.CURRENT_USER_ID || "anon")}`;
+}
+
+function maybeShowAutoSyncPopup(lastSyncMsg) {
+  if (!lastSyncMsg || lastSyncMsg.source !== "auto") return;
+  const key = _autoSyncSeenKey();
+  const seenId = localStorage.getItem(key);
+  if (String(lastSyncMsg.id) === String(seenId)) return; // already shown
+
+  localStorage.setItem(key, String(lastSyncMsg.id));
+
+  if (lastSyncMsg.status === "success") {
+    showToast(`🔄 Auto sync ran — ${lastSyncMsg.message || "your data is up to date"}`, "autosync");
+  } else {
+    showToast(`Auto sync had an issue: ${lastSyncMsg.message || "please check Settings"}`, "warning");
+  }
+}
+
+// Poll while the dashboard tab is open, so a background sync that fires
+// mid-session shows up without the user needing to refresh. Auto-sync
+// itself only runs a few times a day per user (see utils/sync_schedule.py),
+// so a 60s poll is plenty responsive without hammering the backend.
+function startAutoSyncPolling() {
+  setInterval(async () => {
+    try {
+      const status = await apiGet("/api/sync_status");
+      maybeShowAutoSyncPopup(status && status.last_sync_msg);
+    } catch (e) {
+      // silent — this is a background nicety, not critical path
+    }
+  }, 60000);
 }
 
 document.querySelectorAll(".toast").forEach((t, i) => {

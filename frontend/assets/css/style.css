@@ -99,6 +99,7 @@ body {
 .toast-success { background:#071610; border:1px solid #14532d; color:var(--success); }
 .toast-error   { background:#160707; border:1px solid #7f1d1d; color:var(--danger); }
 .toast-warning { background:#160d03; border:1px solid #7c2d12; color:var(--warning); }
+.toast-autosync{ background:#071018; border:1px solid #1e3a5f; color:var(--cf); }
 @keyframes slideIn { from{transform:translateX(110%) scale(.92);opacity:0} to{transform:translateX(0) scale(1);opacity:1} }
 
 /* ── Page Header ─────────────────────────────────────────────────────────── */
