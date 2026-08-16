@@ -23,7 +23,7 @@ from datetime import datetime
 
 # ── DB helpers — shared PostgreSQL module ─────────────────────────────────────
 from database.db import get_db
-from utils.sync_schedule import is_due_for_auto_sync, now_ist
+from utils.sync_schedule import now_ist
 
 
 # ── Google Service Account (env var only) ──────────────────────────────────
@@ -117,12 +117,22 @@ def sync_batch(after_id: int = 0, batch_size: int = None, concurrency: int = Non
     all_users = [dict(u) if not isinstance(u, dict) else u for u in rows]
     results = {"ok": 0, "fail": 0, "cookie_expired": 0}
 
-    # Only sync users whose configured Auto Sync Time has arrived (IST) and
-    # who haven't already been synced today — see utils/sync_schedule.py.
-    # Cursor/pagination below still advances over *all_users* (not just the
-    # due ones) so a quiet batch doesn't stall the Worker's paging loop.
+    # Sync every active user who hasn't been synced yet today (IST).
+    # No sync_time window check — cron fires every 15 min, DB dedup
+    # (ON CONFLICT DO NOTHING) prevents duplicate sheet rows.
     ref = now_ist()
-    users = [u for u in all_users if is_due_for_auto_sync(u, ref)]
+    def _already_synced_today(u):
+        last = u.get("last_sync")
+        if not last:
+            return False
+        try:
+            from utils.sync_schedule import _last_sync_ist
+            dt = _last_sync_ist(last)
+            return dt is not None and dt.date() == ref.date()
+        except Exception:
+            return False
+
+    users = [u for u in all_users if not _already_synced_today(u)]
 
     if users:
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -175,9 +185,19 @@ def main():
 
     all_users = [dict(u) if not isinstance(u, dict) else u for u in users]
     ref = now_ist()
-    users = [u for u in all_users if is_due_for_auto_sync(u, ref)]
+    def _already_synced_today(u):
+        last = u.get("last_sync")
+        if not last:
+            return False
+        try:
+            from utils.sync_schedule import _last_sync_ist
+            dt = _last_sync_ist(last)
+            return dt is not None and dt.date() == ref.date()
+        except Exception:
+            return False
+    users = [u for u in all_users if not _already_synced_today(u)]
     print(f"[scheduler] {len(all_users)} active user(s) scanned, "
-          f"{len(users)} due for auto-sync right now (IST {ref.strftime('%H:%M')}) "
+          f"{len(users)} due for sync today (IST {ref.strftime('%H:%M')}) "
           f"(concurrency={SYNC_CONCURRENCY}).\n")
 
     results = {"ok": 0, "fail": 0, "cookie_expired": 0}
