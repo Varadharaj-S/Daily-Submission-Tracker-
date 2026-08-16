@@ -50,41 +50,79 @@ def regroup_sheet(sheet):
 
     values = values[1:]   # Skip header
 
-    # Group rows into CONTIGUOUS blocks, not by date-string value. A blank
-    # column-A cell means "same block as the row above" (that's the whole
-    # point of the merge); it does NOT mean "same block as every other row
-    # anywhere in the sheet that happens to share this date string". Two
-    # non-adjacent blocks can legitimately have the same date (e.g. today's
-    # date shows up again after a later sync appends more rows below other,
-    # different dates) — grouping those together previously produced a
-    # merge range spanning every unrelated row in between, which collided
-    # with the separate merge already queued for those rows and made the
-    # Sheets API reject the whole batch with "You must select all cells in
-    # a merged range to merge or unmerge them."
+    # Group rows into CONTIGUOUS blocks of the SAME date value — i.e. a
+    # new block starts whenever this row's date differs from the row
+    # directly above it, not whenever column A happens to be non-blank.
+    #
+    # BUGFIX: the previous version treated ANY non-blank column-A cell as
+    # the start of a new block (blank = "continue the block above"). But
+    # every write path in this file (fetch_cf/fetch_lc/fetch_ac, and
+    # rebuild_user_sheet_from_db) writes the FULL date on every single
+    # row — nothing ever leaves column A blank on first write. So every
+    # row always started its own 1-row block, "len(rows) == 1: continue"
+    # skipped every one, and merging never fired at all on freshly written
+    # data (only worked, by accident, on a sheet a previous merge had
+    # already blanked out).
+    #
+    # This version compares each row's date to the row immediately above
+    # it (whether that cell is blank from a prior merge, or fully written
+    # text) — so genuinely adjacent same-date rows merge correctly, while
+    # non-adjacent blocks that happen to share the same date string (e.g.
+    # today's date reappearing lower down after a later sync appended more
+    # rows below other, different dates) still stay separate, which is the
+    # exact regression the old comment above was originally guarding
+    # against.
     date_blocks = []
     current_block = []
+    prev_date = None
     for row_no, row in enumerate(values, start=2):
-        if row[0].strip():
+        date_val = row[0].strip() if row else ""
+        if not date_val:
+            # Blank cell — already part of a merged block above; keep it
+            # in the current block regardless of prev_date.
+            current_block.append(row_no)
+            continue
+        if date_val == prev_date:
+            current_block.append(row_no)
+        else:
             if current_block:
                 date_blocks.append(current_block)
             current_block = [row_no]
-        else:
-            current_block.append(row_no)
+            prev_date = date_val
     if current_block:
         date_blocks.append(current_block)
 
-    try:
-        sheet.spreadsheet.batch_update({
-            "requests": [{
-                "unmergeCells": {
-                    "range": {
-                        "sheetId": sheet.id
-                    }
-                }
-            }]
-        })
-    except:
-        pass
+    # BUGFIX: this used to fire ONE single batch_update with every merge
+    # request for the whole sheet in it. On a sheet with a lot of history
+    # that's potentially hundreds of mergeCells requests in one call — if
+    # the Sheets API rejected/timed out on that single oversized call (a
+    # transient 429/500/503, or just the request getting too big), NOTHING
+    # merged: all-or-nothing failure. Chunking + retrying below means a
+    # transient blip only costs one small chunk, and one bad chunk can't
+    # take down the rest of the sheet's merges with it.
+    def _send_batch_update(reqs, retries=4):
+        """POST one batch_update, retrying on transient Sheets API errors
+        (429 rate limit, 500/503 transient server errors) with backoff.
+        Returns True on success, False if it ultimately failed."""
+        for attempt in range(retries):
+            try:
+                sheet.spreadsheet.batch_update({"requests": reqs})
+                return True
+            except gspread.exceptions.APIError as e:
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status in (429, 500, 503) and attempt < retries - 1:
+                    wait = 2 ** attempt * 2
+                    print(f"⚠️ Sheets API {status} on merge batch, retrying in {wait}s...")
+                    time.sleep(wait)
+                    continue
+                print(f"Merge error: {e}")
+                return False
+            except Exception as e:
+                print(f"Merge error: {e}")
+                return False
+        return False
+
+    _send_batch_update([{"unmergeCells": {"range": {"sheetId": sheet.id}}}])
 
     requests = []
 
@@ -119,13 +157,22 @@ def regroup_sheet(sheet):
             }
         })
 
+    # Chunked sends: small enough per call to stay well under the Sheets
+    # API's per-request size/time limits, and independent enough that one
+    # failed chunk (after its own retries) doesn't block the others —
+    # partial success beats total failure on a big sheet.
+    MERGE_CHUNK_SIZE = 100
     if requests:
-        try:
-            sheet.spreadsheet.batch_update({
-                "requests": requests
-            })
-        except Exception as e:
-            print("Merge error:", e)
+        ok_count = 0
+        fail_count = 0
+        for i in range(0, len(requests), MERGE_CHUNK_SIZE):
+            chunk = requests[i:i + MERGE_CHUNK_SIZE]
+            if _send_batch_update(chunk):
+                ok_count += len(chunk)
+            else:
+                fail_count += len(chunk)
+        if fail_count:
+            print(f"⚠️ regroup_sheet: {fail_count} merge request(s) failed after retries, {ok_count} succeeded")
 
 def backfill_missing_rows_from_db(user_id, username, get_db, year):
     """
