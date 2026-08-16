@@ -41,26 +41,6 @@ from utils.sync_schedule import is_due_for_auto_sync, now_ist
 # was dead weight to begin with.
 
 
-# ── Sync-log helper ─────────────────────────────────────────────────────────
-# Writes a row the dashboard can surface to the student — this is what
-# powers the "Auto sync just ran" popup on GET /dashboard's last_sync_msg
-# (see routes/dashboard.py + frontend/dashboard.html). source='auto'
-# distinguishes cron-triggered syncs from a student's own "Sync Now"
-# click, so the frontend only pops up for the ones the user didn't
-# initiate themselves.
-def _log_auto_sync(db_factory, uid: int, status: str, message: str):
-    try:
-        with db_factory() as db:
-            db.execute(
-                "INSERT INTO sync_logs (user_id,status,message,source,created_at) "
-                "VALUES (?,?,?,?,?)",
-                (uid, status, message, "auto", datetime.utcnow().isoformat(timespec="seconds")),
-            )
-            db.commit()
-    except Exception as e:
-        print(f"[scheduler] sync_logs insert failed for user {uid}: {e}")
-
-
 # ── Sync per-user ─────────────────────────────────────────────────────────────
 
 def sync_one_user(user: dict, db_factory) -> dict:
@@ -74,26 +54,18 @@ def sync_one_user(user: dict, db_factory) -> dict:
     try:
         from normal_sync import sync_user_data
         result = sync_user_data(dict(user), db_factory)
-        new_count = result.get("new_count", 0) if isinstance(result, dict) else 0
-        msg = result.get("message", "Auto sync completed") if isinstance(result, dict) else "Auto sync completed"
-        _log_auto_sync(db_factory, uid, "success", msg)
         return {"uid": uid, "username": username, "ok": True, "result": result}
     except PermissionError as e:
-        # LeetCode cookie expired — mark in DB
         print(f"[scheduler] ⚠️  {username}: cookie expired ({e})")
         try:
             with db_factory() as db:
-                db.execute(
-                    "UPDATE users SET cookie_expiry=1 WHERE id=?", (uid,)
-                )
+                db.execute("UPDATE users SET cookie_expiry=1 WHERE id=?", (uid,))
                 db.commit()
         except Exception as dbe:
             print(f"[scheduler] DB update failed: {dbe}")
-        _log_auto_sync(db_factory, uid, "error", "LeetCode cookie expired — please reconnect.")
         return {"uid": uid, "username": username, "ok": False, "error": "cookie_expired"}
     except Exception as e:
         print(f"[scheduler] ❌  {username}: {e}")
-        _log_auto_sync(db_factory, uid, "error", f"Auto sync failed: {e}")
         return {"uid": uid, "username": username, "ok": False, "error": str(e)}
 
 
@@ -154,6 +126,8 @@ def sync_batch(after_id: int = 0, batch_size: int = None, concurrency: int = Non
 
     if users:
         from concurrent.futures import ThreadPoolExecutor, as_completed
+        from normal_sync import alfa_wakeup
+        alfa_wakeup()  # one ping per batch, not per user
         with ThreadPoolExecutor(max_workers=min(concurrency, len(users))) as pool:
             futures = {pool.submit(sync_one_user, u, get_db): u["username"] for u in users}
             for future in as_completed(futures):
@@ -209,6 +183,9 @@ def main():
     results = {"ok": 0, "fail": 0, "cookie_expired": 0}
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    from normal_sync import alfa_wakeup
+    if users:
+        alfa_wakeup()  # one ping before the full batch, not per user
 
     with ThreadPoolExecutor(max_workers=SYNC_CONCURRENCY) as pool:
         futures = {

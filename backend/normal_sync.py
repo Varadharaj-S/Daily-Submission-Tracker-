@@ -626,12 +626,124 @@ def _normalize_lc_items(payload):
 
 # ================= LEETCODE (LATEST 20 - NO COOKIE) =================
 
+_ALFA_BASE = "https://alfa-leetcode-api.onrender.com"
+
+def alfa_wakeup():
+    """
+    One-shot wake-up ping for alfa-leetcode-api (free Render dyno).
+    Call ONCE per sync batch — NOT once per user or per endpoint.
+    """
+    try:
+        ping = requests.get(_ALFA_BASE, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+        print(f"[LC] alfa wake-up ping: {ping.status_code}")
+    except Exception as e:
+        print(f"[LC] alfa wake-up ping failed: {e}")
+
+
+def _fetch_alfa_with_retry(endpoint, max_retries=3):
+    """
+    GET from alfa-leetcode-api with 429 backoff retry.
+    alfa_wakeup() should already have been called once before this batch.
+    Returns (data_dict_or_list, err_str_or_None).
+    """
+    headers = {"User-Agent": "Mozilla/5.0"}
+    delay = 5  # seconds between retries
+    for attempt in range(1, max_retries + 1):
+        try:
+            res = requests.get(endpoint, headers=headers, timeout=30)
+            if res.status_code == 200:
+                ctype = res.headers.get("Content-Type", "")
+                if "json" not in ctype.lower():
+                    return None, f"non-json content-type={ctype}"
+                return res.json(), None
+            if res.status_code == 429:
+                print(f"[LC] 429 rate-limited (attempt {attempt}/{max_retries}), "
+                      f"sleeping {delay}s…")
+                time.sleep(delay)
+                delay *= 2
+                continue
+            return None, f"status={res.status_code}"
+        except Exception as e:
+            return None, str(e)
+
+    return None, "status=429 (all retries exhausted)"
+
+
+def _fetch_lc_via_graphql(lc_handle, seen, limit=20):
+    """
+    Fallback: hit LeetCode's own public GraphQL with recentAcSubmissionList.
+    No auth required for public profiles. Returns sheet rows (same format
+    as the alfa path), skipping any slug already in `seen`.
+    """
+    LC_GQL = "https://leetcode.com/graphql"
+    query = """
+    query recentAC($username: String!, $limit: Int!) {
+      recentAcSubmissionList(username: $username, limit: $limit) {
+        id
+        title
+        titleSlug
+        timestamp
+      }
+    }
+    """
+    headers = {
+        "Content-Type": "application/json",
+        "Referer": "https://leetcode.com",
+        "User-Agent": "Mozilla/5.0",
+    }
+    try:
+        res = requests.post(
+            LC_GQL,
+            json={"query": query, "variables": {"username": lc_handle, "limit": limit}},
+            headers=headers,
+            timeout=30,
+        )
+        if res.status_code != 200:
+            print(f"[LC-GQL] failed: status={res.status_code}")
+            return []
+        subs = (res.json().get("data") or {}).get("recentAcSubmissionList") or []
+    except Exception as e:
+        print(f"[LC-GQL] exception: {e}")
+        return []
+
+    rows = []
+    for sub in subs:
+        slug = sub.get("titleSlug") or ""
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+
+        title = sub.get("title") or slug
+        ts = sub.get("timestamp") or int(time.time())
+        date = parse_timestamp(ts)
+        epoch = epoch_seconds_from_ts(ts)
+        sub_id = sub.get("id") or ""
+        problem_link = f"https://leetcode.com/problems/{slug}/"
+        sub_link = f"https://leetcode.com/submissions/detail/{sub_id}/" if sub_id else problem_link
+        diff, topic = get_lc_details(slug)
+        rows.append([
+            date,
+            f'=HYPERLINK("{problem_link}", "{title}")',
+            sub_link,
+            diff,
+            "LeetCode",
+            topic,
+            1,
+            epoch,
+        ])
+
+    if rows:
+        print(f"[LC-GQL] fetched {len(rows)} rows via direct GraphQL")
+    return rows
+
+
 def fetch_lc(lc_handle):
     if not lc_handle:
         print("[LC] No handle set, skipping.")
         return []
 
     print("[LC] Starting no-cookie fetch...")
+    alfa_wakeup()
 
     rows = []
     seen = set()
@@ -644,11 +756,7 @@ def fetch_lc(lc_handle):
 
     for endpoint in endpoints:
         try:
-            data, err = safe_get_json(
-                endpoint,
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=30,
-            )
+            data, err = _fetch_alfa_with_retry(endpoint, max_retries=3)
             if not data:
                 print(f"[LC] endpoint failed: {err}")
                 continue
@@ -710,12 +818,6 @@ def fetch_lc(lc_handle):
                 sub_link = f"https://leetcode.com/submissions/detail/{sub_id}/" if sub_id else problem_link
 
                 diff, topic = get_lc_details(slug)
-                
-                print("=" * 60)
-                print("Slug :", slug)
-                print("Difficulty :", diff)
-                print("Topic :", topic)
-                print("=" * 60)
                 temp_rows.append([
                     date,
                     f'=HYPERLINK("{problem_link}", "{title}")',
@@ -724,16 +826,21 @@ def fetch_lc(lc_handle):
                     "LeetCode",
                     topic,
                     1,
-                    epoch,  # hidden 8th element: see fetch_cf comment
+                    epoch,
                 ])
 
             if temp_rows:
                 rows = temp_rows
-                print(f"[LC] fetched {len(rows)} rows from {endpoint}")
+                print(f"[LC] fetched {len(rows)} rows from alfa endpoint")
                 break
 
         except Exception as e:
             print(f"[LC] endpoint exception: {e}")
+
+    # ── Fallback: direct LeetCode GraphQL ──────────────────────────────────
+    if not rows:
+        print("[LC] alfa endpoints failed — trying direct GraphQL fallback…")
+        rows = _fetch_lc_via_graphql(lc_handle, seen)
 
     if rows:
         save_cache(LC_CACHE_FILE, rows)

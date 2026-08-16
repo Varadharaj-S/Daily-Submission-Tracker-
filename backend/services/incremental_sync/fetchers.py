@@ -116,6 +116,92 @@ def fetch_cf_incremental(cf_handle, since=None, max_count=500):
 
 
 # ── LeetCode (see module docstring — no real incremental support exists) ─────
+
+_ALFA_BASE = "https://alfa-leetcode-api.onrender.com"
+
+def alfa_wakeup():
+    """One-shot wake-up for alfa-leetcode-api. Call ONCE before a sync batch, not per user."""
+    try:
+        ping = requests.get(_ALFA_BASE, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+        print(f"[LC] alfa wake-up ping: {ping.status_code}")
+    except Exception as e:
+        print(f"[LC] alfa wake-up ping failed: {e}")
+
+
+def _alfa_get_with_retry(endpoint, max_retries=3):
+    """GET from alfa-leetcode-api with 429 backoff retry. alfa_wakeup() must be called once before the batch."""
+    headers = {"User-Agent": "Mozilla/5.0"}
+    delay = 5
+    for attempt in range(1, max_retries + 1):
+        try:
+            res = requests.get(endpoint, headers=headers, timeout=30)
+            if res.status_code == 200:
+                ctype = res.headers.get("Content-Type", "")
+                if "json" not in ctype.lower():
+                    return None, f"non-json content-type={ctype}"
+                return res.json(), None
+            if res.status_code == 429:
+                print(f"[LC-incremental] 429 (attempt {attempt}/{max_retries}), sleeping {delay}s…")
+                time.sleep(delay)
+                delay *= 2
+                continue
+            return None, f"status={res.status_code}"
+        except Exception as e:
+            return None, str(e)
+    return None, "status=429 (all retries exhausted)"
+
+
+def _fetch_lc_via_graphql_incremental(lc_handle, seen, limit=20):
+    """Direct LeetCode public GraphQL fallback for recentAcSubmissionList."""
+    query = """
+    query recentAC($username: String!, $limit: Int!) {
+      recentAcSubmissionList(username: $username, limit: $limit) {
+        id title titleSlug timestamp
+      }
+    }
+    """
+    try:
+        res = requests.post(
+            "https://leetcode.com/graphql",
+            json={"query": query, "variables": {"username": lc_handle, "limit": limit}},
+            headers={"Content-Type": "application/json", "Referer": "https://leetcode.com",
+                     "User-Agent": "Mozilla/5.0"},
+            timeout=30,
+        )
+        if res.status_code != 200:
+            print(f"[LC-GQL-incremental] failed: status={res.status_code}")
+            return []
+        subs = (res.json().get("data") or {}).get("recentAcSubmissionList") or []
+    except Exception as e:
+        print(f"[LC-GQL-incremental] exception: {e}")
+        return []
+
+    items = []
+    for sub in subs:
+        slug = sub.get("titleSlug") or ""
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        ts = sub.get("timestamp") or int(time.time())
+        date_str = parse_timestamp(ts)
+        sub_id = sub.get("id") or ""
+        diff, topic = get_lc_details(slug)
+        items.append({
+            "platform": "LeetCode",
+            "problem_id": slug,
+            "problem_name": sub.get("title") or slug,
+            "problem_url": f"https://leetcode.com/problems/{slug}/",
+            "submission_url": f"https://leetcode.com/submissions/detail/{sub_id}/" if sub_id else f"https://leetcode.com/problems/{slug}/",
+            "difficulty": diff,
+            "tags": topic,
+            "solved_date": datetime.strptime(date_str, "%Y-%m-%d").strftime("%d-%m-%Y"),
+            "solved_epoch": int(datetime.strptime(date_str, "%Y-%m-%d").timestamp()),
+        })
+    if items:
+        print(f"[LC-GQL-incremental] fetched {len(items)} rows via direct GraphQL")
+    return items
+
+
 def fetch_lc_incremental(lc_handle, since=None):
     if not lc_handle:
         return []
@@ -129,8 +215,9 @@ def fetch_lc_incremental(lc_handle, since=None):
     seen = set()
     for endpoint in endpoints:
         try:
-            data, err = safe_get_json(endpoint, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+            data, err = _alfa_get_with_retry(endpoint, max_retries=3)
             if not data:
+                print(f"[LC-incremental] endpoint failed: {err}")
                 continue
             subs = _normalize_lc_items(data)
             if not subs:
@@ -149,7 +236,7 @@ def fetch_lc_incremental(lc_handle, since=None):
                 seen.add(slug)
 
                 ts = sub.get("timestamp") or sub.get("submittedAt") or sub.get("date") or sub.get("createdAt") or int(time.time())
-                date_str = parse_timestamp(ts)  # "%Y-%m-%d"
+                date_str = parse_timestamp(ts)
                 title = sub.get("title") or sub.get("questionTitle") or slug
                 sub_id = sub.get("id") or sub.get("submissionId") or sub.get("submission_id") or ""
                 diff, topic = get_lc_details(slug)
@@ -170,6 +257,11 @@ def fetch_lc_incremental(lc_handle, since=None):
                 break
         except Exception as e:
             print(f"[LC-incremental] endpoint exception: {e}")
+
+    # Fallback: direct LeetCode GraphQL
+    if not items:
+        print("[LC-incremental] alfa failed — trying direct GraphQL fallback…")
+        items = _fetch_lc_via_graphql_incremental(lc_handle, seen)
 
     return items
 

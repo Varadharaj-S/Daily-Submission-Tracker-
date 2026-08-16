@@ -162,7 +162,7 @@ function renderDashboard() {
     </div>
   </div>
 
-  <div id="syncStatus" class="sync-status" style="display:none"></div>
+
 
   <div class="sync-settings">
     <label>⏰ Auto Sync Time</label>
@@ -427,11 +427,6 @@ async function loadDashboard() {
   if (!me) return;
   window.CURRENT_USER_ID = me.id;
   await loadDashboard();
-  // Auto-sync popup: show immediately if the dashboard load itself
-  // surfaced an unseen auto-triggered sync, then keep polling in case
-  // one fires while this tab stays open.
-  maybeShowAutoSyncPopup(DASH && DASH.data && DASH.data.last_sync_msg);
-  startAutoSyncPolling();
 })();
 </script>
 </body>

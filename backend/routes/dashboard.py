@@ -39,24 +39,6 @@ def _is_solved_by_student_db(db, user_id, problem_url, problem_name):
     return False
 
 
-# ── Auto-sync status (lightweight poll for the dashboard popup) ────────────────
-# GET /dashboard already includes the latest sync_logs row as
-# data.last_sync_msg, but refetching the entire dashboard payload every
-# 60s just to check for a new auto-sync would be wasteful. This returns
-# only what the popup needs.
-@app.route("/api/sync_status")
-@login_required
-@verified_required
-def sync_status():
-    with get_db() as db:
-        last = db.execute(
-            "SELECT id, status, message, source, created_at FROM sync_logs "
-            "WHERE user_id=? ORDER BY id DESC LIMIT 1",
-            (current_user.id,)
-        ).fetchone()
-    return jsonify({"last_sync_msg": dict(last) if last else None})
-
-
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 @app.route("/dashboard")
 @login_required
@@ -78,11 +60,6 @@ def dashboard():
             (current_user.id,)
         ).fetchone()["c"]
 
-        sync_log = db.execute(
-            "SELECT * FROM sync_logs WHERE user_id=? ORDER BY created_at DESC LIMIT 1",
-            (current_user.id,)
-        ).fetchone()
-
     # MAIN DATA
     data = get_dashboard_data(subs)
 
@@ -94,7 +71,6 @@ def dashboard():
     # EXTRA DATA
     data["following_count"] = fol_count
     data["follower_count"] = fwg_count
-    data["last_sync_msg"] = dict(sync_log) if sync_log else None
     if isinstance(data.get("recent"), list):
         data["recent"] = [dict(r) if hasattr(r, "keys") else r for r in data["recent"]]
 

@@ -90,6 +90,98 @@ def _normalize_items(payload):
                         return v
     return []
 
+_ALFA_BASE = "https://alfa-leetcode-api.onrender.com"
+
+def alfa_wakeup():
+    """One-shot wake-up for alfa-leetcode-api. Call ONCE before a sync batch, not per user."""
+    try:
+        ping = requests.get(_ALFA_BASE, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+        print(f"[LC] alfa wake-up ping: {ping.status_code}")
+    except Exception as e:
+        print(f"[LC] alfa wake-up ping failed: {e}")
+
+
+def _alfa_get_with_retry(endpoint, max_retries=3):
+    """GET from alfa-leetcode-api with 429 backoff retry. alfa_wakeup() must be called once before the batch."""
+    headers = {"User-Agent": "Mozilla/5.0"}
+    delay = 5
+    for attempt in range(1, max_retries + 1):
+        try:
+            res = requests.get(endpoint, headers=headers, timeout=30)
+            if res.status_code == 200:
+                ctype = res.headers.get("Content-Type", "")
+                if "json" not in ctype.lower():
+                    return None
+                return res.json()
+            if res.status_code == 429:
+                print(f"[LC] 429 rate-limited (attempt {attempt}/{max_retries}), sleeping {delay}s…")
+                time.sleep(delay)
+                delay *= 2
+                continue
+            print(f"[LC] endpoint failed: status={res.status_code}")
+            return None
+        except Exception as e:
+            print(f"[LC] endpoint error: {e}")
+            return None
+    print("[LC] endpoint failed: status=429 (all retries exhausted)")
+    return None
+
+
+def _fetch_lc_gql_fallback(lc_handle, seen, last_sync=None, limit=20):
+    """Direct LeetCode public GraphQL — recentAcSubmissionList. No auth needed."""
+    query = """
+    query recentAC($username: String!, $limit: Int!) {
+      recentAcSubmissionList(username: $username, limit: $limit) {
+        id title titleSlug timestamp
+      }
+    }
+    """
+    try:
+        res = requests.post(
+            LC_GQL,
+            json={"query": query, "variables": {"username": lc_handle, "limit": limit}},
+            headers={"Content-Type": "application/json", "Referer": "https://leetcode.com",
+                     "User-Agent": "Mozilla/5.0"},
+            timeout=30,
+        )
+        if res.status_code != 200:
+            print(f"[LC-GQL] failed: status={res.status_code}")
+            return []
+        subs = (res.json().get("data") or {}).get("recentAcSubmissionList") or []
+    except Exception as e:
+        print(f"[LC-GQL] exception: {e}")
+        return []
+
+    items = []
+    for sub in subs:
+        slug = sub.get("titleSlug") or ""
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        ts = sub.get("timestamp") or int(time.time())
+        date = parse_timestamp(ts)
+        if last_sync:
+            try:
+                if datetime.strptime(date, "%Y-%m-%d") < datetime.strptime(last_sync[:10], "%Y-%m-%d"):
+                    continue
+            except Exception:
+                pass
+        sub_id = sub.get("id") or ""
+        diff, topic = get_lc_details(slug)
+        items.append({
+            "platform": "LeetCode",
+            "problem_name": sub.get("title") or slug,
+            "problem_id": slug,
+            "problem_url": f"https://leetcode.com/problems/{slug}/",
+            "difficulty": diff,
+            "tags": topic,
+            "solved_date": date,
+        })
+    if items:
+        print(f"[LC-GQL] fetched {len(items)} rows via direct GraphQL")
+    return items
+
+
 def fetch_lc_public(lc_handle, last_sync=None):
     """Public API fetch — last ~20 submissions. Uses incremental if last_sync provided."""
     if not lc_handle:
@@ -104,61 +196,57 @@ def fetch_lc_public(lc_handle, last_sync=None):
     ]
 
     for endpoint in endpoints:
-        try:
-            res = requests.get(endpoint, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
-            if res.status_code != 200:
+        data = _alfa_get_with_retry(endpoint, max_retries=3)
+        if not data:
+            continue
+        subs = _normalize_items(data)
+        if not subs:
+            continue
+
+        temp = []
+        for sub in subs:
+            slug = (sub.get("titleSlug") or sub.get("title_slug") or
+                    sub.get("questionTitleSlug") or "")
+            title = (sub.get("title") or sub.get("questionTitle") or slug or "Unknown")
+            if not slug or slug in seen:
                 continue
-            data = res.json()
-            subs = _normalize_items(data)
-            if not subs:
+            seen.add(slug)
+
+            status = str(sub.get("statusDisplay") or sub.get("status") or "").lower()
+            if status and not any(k in status for k in ("accepted", "ac", "success")):
                 continue
 
-            temp = []
-            for sub in subs:
-                slug = (sub.get("titleSlug") or sub.get("title_slug") or
-                        sub.get("questionTitleSlug") or "")
-                title = (sub.get("title") or sub.get("questionTitle") or slug or "Unknown")
-                if not slug or slug in seen:
-                    continue
-                seen.add(slug)
+            ts = (sub.get("timestamp") or sub.get("submittedAt") or
+                  sub.get("date") or int(time.time()))
+            date = parse_timestamp(ts)
 
-                status = str(sub.get("statusDisplay") or sub.get("status") or "").lower()
-                if status and not any(k in status for k in ("accepted", "ac", "success")):
-                    continue
+            if last_sync:
+                try:
+                    if datetime.strptime(date, "%Y-%m-%d") < datetime.strptime(last_sync[:10], "%Y-%m-%d"):
+                        continue
+                except Exception:
+                    pass
 
-                ts = (sub.get("timestamp") or sub.get("submittedAt") or
-                      sub.get("date") or int(time.time()))
-                date = parse_timestamp(ts)
+            sub_id = sub.get("id") or sub.get("submissionId") or ""
+            diff, topic = get_lc_details(slug)
+            temp.append({
+                "platform": "LeetCode",
+                "problem_name": title,
+                "problem_id": slug,
+                "problem_url": f"https://leetcode.com/problems/{slug}/",
+                "difficulty": diff,
+                "tags": topic,
+                "solved_date": date,
+            })
 
-                # Incremental: skip if older than last_sync
-                if last_sync:
-                    try:
-                        sub_dt = datetime.strptime(date, "%Y-%m-%d")
-                        last_dt = datetime.strptime(last_sync[:10], "%Y-%m-%d")
-                        if sub_dt < last_dt:
-                            continue
-                    except Exception:
-                        pass
+        if temp:
+            rows = temp
+            break
 
-                sub_id = sub.get("id") or sub.get("submissionId") or ""
-                problem_link = f"https://leetcode.com/problems/{slug}/"
-                diff, topic = get_lc_details(slug)
-
-                temp.append({
-                    "platform": "LeetCode",
-                    "problem_name": title,
-                    "problem_id": slug,
-                    "problem_url": problem_link,
-                    "difficulty": diff,
-                    "tags": topic,
-                    "solved_date": date,
-                })
-
-            if temp:
-                rows = temp
-                break
-        except Exception as e:
-            print(f"[LC] endpoint error: {e}")
+    # Fallback: direct LeetCode GraphQL
+    if not rows:
+        print("[LC] alfa endpoints failed — trying direct GraphQL fallback…")
+        rows = _fetch_lc_gql_fallback(lc_handle, seen, last_sync)
 
     if rows:
         save_cache(rows)
