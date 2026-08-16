@@ -869,11 +869,34 @@ def sync_user_data(user, get_db):
 
         if cursor.rowcount > 0:
             new_count += 1
-            new_rows.append(row[:7])  # keep the sheet's 7-column format — drop the hidden epoch
+            # Sort key: prefer the raw epoch (exact, handles same-day
+            # ordering across platforms); fall back to parsing the
+            # DD-MM-YYYY solved_date string for legacy/cache rows that
+            # don't carry one. Keep the key out-of-band — the sheet's
+            # 7-column row format (row[:7]) still drops the hidden epoch.
+            if epoch:
+                sort_key = epoch
+            else:
+                try:
+                    sort_key = datetime.strptime(row[0], "%d-%m-%Y").timestamp()
+                except Exception:
+                    sort_key = 0  # unparseable date — sorts first rather than crashing
+            new_rows.append((sort_key, row[:7]))
 
     cursor.execute("UPDATE users SET last_sync=%s WHERE id=%s", (now_iso, user_id))
     conn.commit()
     conn.close()
+
+    # BUGFIX: all_data is CF rows, then LC rows, then AC rows, each already
+    # in that platform's own order — but concatenated across platforms
+    # that's NOT chronological (e.g. a Codeforces solve from days ago can
+    # land after this run's LeetCode solves from today). append_new_rows_to_
+    # sheet always writes to the true bottom of the sheet, so unsorted
+    # new_rows showed up as out-of-order dates mixed into otherwise-sorted
+    # history. Sort chronologically before writing so each sync's batch is
+    # at least internally in date order.
+    new_rows.sort(key=lambda pair: pair[0])
+    new_rows = [row for _, row in new_rows]
 
     # Write new rows to this user's own tab in the Google Sheet.
     # This APPENDS only — it never clears the sheet, so a failure here
