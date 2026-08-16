@@ -34,6 +34,7 @@ import time
 
 from config import Config
 from utils.sync_schedule import is_due_for_auto_sync, now_ist
+from datetime import datetime
 
 # How often (in seconds) this loop wakes up and checks which users are due
 # for their configured Auto Sync Time. Needs to be short relative to the
@@ -73,10 +74,29 @@ def run_scheduler():
             due_users = [dict(row) for row in rows if is_due_for_auto_sync(dict(row), ref)]
 
             for user in due_users:
+                uid = user["id"]
                 try:
-                    sync_user_data(user, get_db)
+                    result = sync_user_data(user, get_db)
+                    msg = result.get("message", "Auto sync completed") if isinstance(result, dict) else "Auto sync completed"
+                    with get_db() as db:
+                        db.execute(
+                            "INSERT INTO sync_logs (user_id,status,message,source,created_at) "
+                            "VALUES (?,?,?,?,?)",
+                            (uid, "success", msg, "auto", datetime.utcnow().isoformat(timespec="seconds")),
+                        )
+                        db.commit()
                 except Exception as e:
                     print(f"[scheduler_service] sync failed for user {user.get('username')}: {e}")
+                    try:
+                        with get_db() as db:
+                            db.execute(
+                                "INSERT INTO sync_logs (user_id,status,message,source,created_at) "
+                                "VALUES (?,?,?,?,?)",
+                                (uid, "error", f"Auto sync failed: {e}", "auto", datetime.utcnow().isoformat(timespec="seconds")),
+                            )
+                            db.commit()
+                    except Exception as e2:
+                        print(f"[scheduler_service] sync_logs insert failed: {e2}")
         except Exception as e:
             print(f"[scheduler_service] tick failed: {e}")
 

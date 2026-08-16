@@ -207,6 +207,7 @@ def init_db():
             user_id    INTEGER,
             status     TEXT,
             message    TEXT,
+            source     TEXT DEFAULT 'manual',
             created_at TEXT DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS daily_challenges (
@@ -468,6 +469,13 @@ def ensure_db_columns():
         # (e.g. every Vercel cold start) and never database/migrate.py
         # would still be missing it, and the same INSERT would 500.
         "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ",
+        # Auto-sync dashboard popup: distinguishes a cron/scheduler-triggered
+        # sync (source='auto') from a student's own "Sync Now" click or an
+        # admin-triggered sync, so the frontend only pops up a notification
+        # for the ones the user didn't personally initiate. See
+        # scheduler.py::_log_auto_sync / services/scheduler_service.py and
+        # routes/dashboard.py's last_sync_msg.
+        "ALTER TABLE sync_logs ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'",
     ]
     for stmt in stmts:
         try:
