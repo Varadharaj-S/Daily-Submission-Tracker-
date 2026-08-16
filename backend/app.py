@@ -104,10 +104,27 @@ def e429(e):
     return jsonify({"success": False, "code": 429, "message": "Too many requests."}), 429
 
 
+# ── Background auto-sync thread ──────────────────────────────────────────────
+# BUG FIX: this used to live inside `if __name__ == "__main__":` below, which
+# only runs for `python app.py` (local dev server). Under gunicorn (Render's
+# Procfile: `gunicorn app:app`) or Vercel, this module is only ever
+# *imported* (via wsgi.py / vercel.json) — `__main__` never executes there —
+# so start_sync_worker() never ran in production and the in-process
+# auto-sync safety net silently did nothing, even though the "Auto Sync"
+# toggle in Settings looked like it was on. Same bug class as
+# ensure_db_columns()/ensure_tracker_schema() above (see the comment there);
+# fixed the same way: call it unconditionally at import time so it also
+# fires on gunicorn workers, not just the dev server.
+#
+# NOTE for local `python app.py` with the Werkzeug reloader (debug=True):
+# the reloader re-imports this module in a child process, so the thread may
+# start twice locally. Harmless for this safety-net loop (same as the
+# schema-init calls above already running unconditionally on every cold
+# start) — it just means two redundant sync sweeps in dev, never in
+# production where there's no reloader.
+from workers.sync_worker import start_sync_worker
+start_sync_worker()
+
+
 if __name__ == "__main__":
-    from workers.sync_worker import start_sync_worker
-
-    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
-        start_sync_worker()
-
     app.run(debug=True)

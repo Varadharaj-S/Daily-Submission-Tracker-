@@ -77,6 +77,11 @@ class Config:
     CONTEST_SYNC_INTERVAL_MINUTES = int(os.environ.get("CONTEST_SYNC_INTERVAL_MINUTES", "5"))
 
     # In-process per-user daily auto-sync loop (services/scheduler_service.py).
+    # Kept at 24h to match the Vercel Hobby-plan cron (vercel.json's
+    # /api/cron/daily-sync), which only allows once-a-day schedules — Vercel
+    # silently ignores/collapses more frequent cron expressions on the free
+    # plan. If you upgrade to Vercel Pro (or move the primary schedule to
+    # Render, which has no such limit), this can go back down to 12.
     AUTO_SYNC_INTERVAL_HOURS = int(os.environ.get("AUTO_SYNC_INTERVAL_HOURS", "24"))
 
     # ── /import_lc 504 fix (Vercel → Render handoff) ───────────────────────

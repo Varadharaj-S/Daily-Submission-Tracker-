@@ -63,13 +63,18 @@ def _worker_configured() -> bool:
 @app.route("/api/cron/daily-sync", methods=["GET", "POST"])
 def cron_daily_sync():
     """
-    Called by Vercel Cron (vercel.json schedule).
+    Called by Vercel Cron (vercel.json schedule) OR by frontend/worker.js's
+    Cloudflare Cron Trigger loop (this deployment's actual driver — see
+    that file's scheduled() handler; no Render worker exists here).
 
-    When the worker is configured: POSTs to the worker's
-    /internal/cron/daily-sync → returns fast.
-    Otherwise (this process IS the worker — Render's own cron calls
-    `python scheduler.py` directly so this branch is rarely hit there):
-    runs scheduler.main() inline.
+    Delegates to a persistent worker if WORKER_BACKEND_URL is configured
+    (unused in the Cloudflare+Vercel-only setup, kept for anyone who does
+    add a Render worker later). Otherwise runs exactly ONE batch of users
+    (scheduler.sync_batch) and returns — it does NOT try to sync everyone
+    in a single request, because a Vercel function only gets ~10s (Hobby) /
+    60s (Pro), nowhere near enough for hundreds/thousands of users.
+    Pass ?after_id=<cursor> to resume; response includes "next_cursor" and
+    "done" so the caller knows whether to call again.
     """
     if not _check_cron_secret():
         return jsonify({"ok": False, "message": "Unauthorized"}), 401
@@ -83,10 +88,18 @@ def cron_daily_sync():
             return jsonify({"ok": False, "message": f"Worker delegation failed: {e}"}), 503
         return jsonify({"ok": True, "message": "Daily sync delegated to worker backend"})
 
-    # This process is the worker (or local dev): run inline
-    from scheduler import main as run_daily_sync
-    run_daily_sync()
-    return jsonify({"ok": True, "message": "Daily sync completed"})
+    # No worker configured: run one bounded batch inline and return. The
+    # caller (Cloudflare Cron Trigger, see frontend/worker.js) loops this
+    # with the returned next_cursor until done=true.
+    from scheduler import sync_batch
+
+    try:
+        after_id = int(request.args.get("after_id", 0))
+    except (TypeError, ValueError):
+        after_id = 0
+
+    result = sync_batch(after_id=after_id)
+    return jsonify({"ok": True, **result})
 
 
 @app.route("/api/cron/contest-sync", methods=["GET", "POST"])

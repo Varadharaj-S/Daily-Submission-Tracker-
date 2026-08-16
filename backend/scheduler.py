@@ -74,6 +74,88 @@ def sync_one_user(user: dict, db_factory) -> dict:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+# How many users to sync in parallel. Sequential (1 user at a time + 1s
+# sleep) doesn't scale: at 1000 users that's 1000+ seconds of sleep() alone,
+# before any actual CF/LC/AC/Sheets API time — easily 30-60+ minutes total,
+# which risks the cron job's execution-time budget and just delays syncing
+# for users near the end of the list. Bounded concurrency fixes this without
+# hammering the LC/CF/AC APIs or Neon's connection pool — each worker opens
+# its own DB connection via get_db() (see database/db.py: every call opens a
+# fresh psycopg2 connection, so this is safe across threads), and 10
+# concurrent users is gentle enough not to trip per-IP rate limits on the
+# competitive-programming platforms.
+SYNC_CONCURRENCY = int(os.environ.get("SYNC_CONCURRENCY", "10"))
+
+# How many users ONE Vercel serverless invocation processes before returning.
+# No Render worker in this deployment (Cloudflare frontend + Vercel backend
+# only), so there's no persistent process to hand the full sync off to —
+# every invocation of /api/cron/daily-sync runs inside a Vercel function,
+# hard-capped at ~10s (Hobby) / 60s (Pro). Even with SYNC_CONCURRENCY=10,
+# 1000 users can't finish in one request. So instead of "sync everyone",
+# each call syncs one small batch (ordered by user id) and reports back a
+# cursor + whether more remain — see sync_batch() below and
+# routes/cron.py's cron_daily_sync(). frontend/worker.js's Cloudflare Cron
+# Trigger calls this in a loop (Cloudflare Workers aren't bound by Vercel's
+# per-invocation limit) until every active user is synced for the day.
+DAILY_SYNC_BATCH_SIZE = int(os.environ.get("DAILY_SYNC_BATCH_SIZE", "15"))
+
+
+def sync_batch(after_id: int = 0, batch_size: int = None, concurrency: int = None) -> dict:
+    """Sync ONE batch of users (id > after_id, ordered by id, LIMIT batch_size)
+    and return immediately — built to run inside a single short-lived Vercel
+    function call. The caller is responsible for looping: keep calling with
+    `after_id = result["next_cursor"]` until `result["done"]` is True.
+    """
+    batch_size = batch_size or DAILY_SYNC_BATCH_SIZE
+    concurrency = concurrency or SYNC_CONCURRENCY
+
+    _write_google_creds()
+
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT * FROM users
+               WHERE status='active' AND is_verified=1 AND is_admin=0 AND id > ?
+               ORDER BY id ASC LIMIT ?""",
+            (after_id, batch_size),
+        ).fetchall()
+
+    users = [dict(u) if not isinstance(u, dict) else u for u in rows]
+    results = {"ok": 0, "fail": 0, "cookie_expired": 0}
+
+    if users:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=min(concurrency, len(users))) as pool:
+            futures = {pool.submit(sync_one_user, u, get_db): u["username"] for u in users}
+            for future in as_completed(futures):
+                username = futures[future]
+                try:
+                    res = future.result()
+                except Exception as e:
+                    print(f"  ❌ {username}: unexpected error: {e}")
+                    results["fail"] += 1
+                    continue
+
+                if res["ok"]:
+                    results["ok"] += 1
+                    print(f"  ✅ {username}: synced.")
+                elif res.get("error") == "cookie_expired":
+                    results["cookie_expired"] += 1
+                    print(f"  ⚠️  {username}: cookie expired.")
+                else:
+                    results["fail"] += 1
+                    print(f"  ❌ {username}: {res.get('error', 'unknown')}")
+
+    next_cursor = users[-1]["id"] if users else after_id
+    done = len(users) < batch_size  # fewer rows than requested = reached the end
+
+    return {
+        "processed": len(users),
+        "next_cursor": next_cursor,
+        "done": done,
+        **results,
+    }
+
+
 def main():
     start = datetime.now()
     print(f"\n{'='*55}")
@@ -88,26 +170,40 @@ def main():
             "SELECT * FROM users WHERE status='active' AND is_verified=1 AND is_admin=0"
         ).fetchall()
 
-    print(f"[scheduler] Found {len(users)} active user(s) to sync.\n")
+    users = [dict(u) if not isinstance(u, dict) else u for u in users]
+    print(f"[scheduler] Found {len(users)} active user(s) to sync "
+          f"(concurrency={SYNC_CONCURRENCY}).\n")
 
     results = {"ok": 0, "fail": 0, "cookie_expired": 0}
 
-    for user in users:
-        username = user.get("username", "?") if isinstance(user, dict) else user["username"]
-        print(f"  ▶ Syncing {username}…")
-        res = sync_one_user(dict(user) if not isinstance(user, dict) else user, get_db)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        if res["ok"]:
-            results["ok"] += 1
-            print(f"    ✅ Done.")
-        elif res.get("error") == "cookie_expired":
-            results["cookie_expired"] += 1
-            print(f"    ⚠️  Cookie expired — user must reconnect.")
-        else:
-            results["fail"] += 1
-            print(f"    ❌ Failed: {res.get('error', 'unknown')}")
+    with ThreadPoolExecutor(max_workers=SYNC_CONCURRENCY) as pool:
+        futures = {
+            pool.submit(sync_one_user, user, get_db): user.get("username", "?")
+            for user in users
+        }
+        for future in as_completed(futures):
+            username = futures[future]
+            try:
+                res = future.result()
+            except Exception as e:
+                # sync_one_user already catches its own exceptions and
+                # returns a dict, but guard here too so one bad worker
+                # can't kill the whole batch.
+                print(f"  ❌ {username}: unexpected error: {e}")
+                results["fail"] += 1
+                continue
 
-        time.sleep(1)  # polite delay between users
+            if res["ok"]:
+                results["ok"] += 1
+                print(f"  ✅ {username}: synced.")
+            elif res.get("error") == "cookie_expired":
+                results["cookie_expired"] += 1
+                print(f"  ⚠️  {username}: cookie expired — user must reconnect.")
+            else:
+                results["fail"] += 1
+                print(f"  ❌ {username}: {res.get('error', 'unknown')}")
 
     elapsed = (datetime.now() - start).seconds
     print(f"\n{'='*55}")
