@@ -148,12 +148,31 @@ async function syncUser(uid, btn) {
 }
 
 async function restoreSheet(uid, username, btn) {
-  if (!confirm(`Rebuild ${username}'s Google Sheet tab from the database? Anything typed directly into the Sheet will be replaced.`)) return;
+  // Non-destructive catch-up: appends rows that exist in the DB but are
+  // missing from the Sheet. Does NOT clear or re-sort the sheet — use
+  // "Rebuild (sorted)" below to fix out-of-order dates.
+  if (!confirm(`Backfill any DB rows missing from ${username}'s Google Sheet tab? This only appends — it won't reorder or clear anything.`)) return;
   const icon = btn.textContent;
   btn.classList.add("btn-spin"); btn.disabled = true;
   try {
     const d = await apiPostJSON(`/admin/restore_sheet/${uid}`, {});
     adminToast(d.message || (d.ok ? "Sheet restored" : "Restore failed"), d.ok);
+  } catch (e) { adminToast("Request failed", false); }
+  btn.classList.remove("btn-spin"); btn.disabled = false; btn.textContent = icon;
+}
+
+async function rebuildSheet(uid, username, btn) {
+  // DESTRUCTIVE: fully clears this user's Sheet tab and rewrites it from
+  // the database in correct chronological (date) order — same tab, same
+  // place, just re-sorted. Use this to fix rows that ended up out of
+  // date-order (e.g. from a late-discovered old submission getting
+  // appended to the bottom instead of its correct date position).
+  if (!confirm(`Fully clear and rebuild ${username}'s Google Sheet tab in date order? Anything typed directly into the Sheet will be replaced with the database's data.`)) return;
+  const icon = btn.textContent;
+  btn.classList.add("btn-spin"); btn.disabled = true;
+  try {
+    const d = await apiPostJSON(`/admin/rebuild_sheet/${uid}`, {});
+    adminToast(d.message || (d.ok ? "Sheet rebuilt in date order" : "Rebuild failed"), d.ok);
   } catch (e) { adminToast("Request failed", false); }
   btn.classList.remove("btn-spin"); btn.disabled = false; btn.textContent = icon;
 }
@@ -239,7 +258,8 @@ function renderUsersTable() {
         <td class="actions-cell">
           <button class="btn-sm btn-promote" title="Details" onclick="toggleDetail(${u.id})">⋯</button>
           <button class="btn-sm btn-sync" title="Sync this user" onclick="syncUser(${u.id}, this)">↻</button>
-          <button class="btn-sm btn-restore" title="Rebuild this user's Google Sheet from the database" onclick="restoreSheet(${u.id}, '${u.username}', this)">📊</button>
+          <button class="btn-sm btn-restore" title="Backfill missing rows from database (append only, no reorder)" onclick="restoreSheet(${u.id}, '${u.username}', this)">📊</button>
+          <button class="btn-sm btn-restore" title="Fully rebuild this user's Google Sheet in date order (clears and rewrites)" onclick="rebuildSheet(${u.id}, '${u.username}', this)">🗓️</button>
           ${u.id !== d.__me_id ? `
             <button class="btn-sm btn-promote" title="${u.is_admin ? "Demote" : "Promote to Admin"}" onclick="promoteUser(${u.id})">${u.is_admin ? "↓" : "↑"}</button>
             ${u.lc_imported ? `<button class="btn-sm btn-reset" title="Reset LC import flag" onclick="resetLC(${u.id}, this)">⟳LC</button>` : ""}

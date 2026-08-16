@@ -76,7 +76,7 @@ async function sendFeedback() {
 }
 
 function renderDashboard() {
-  const { user, data, challenges, mentor_tasks, sheet_url } = DASH;
+  const { user, data, challenges, mentor_tasks } = DASH;
 
   const app = document.getElementById("app");
   app.innerHTML = `
@@ -104,7 +104,6 @@ function renderDashboard() {
           <textarea id="feedbackText" rows="4" placeholder="Tell us about your experience..." class="form-input"></textarea>
           <button onclick="sendFeedback()" class="btn btn-primary">Send Feedback</button>
         </div>`}
-      ${sheet_url ? `<a href="${sheet_url}" target="_blank" class="btn btn-outline">📊 Open Sheet</a>` : ""}
       <a href="#" onclick="openMySheet();return false;" class="btn btn-outline" title="Open your tab in the shared Google Sheet">📄 My Sheet</a>
       <a href="daily_tracker.html" class="btn btn-outline">📘 Daily Tracker</a>
       <a href="${BASE_API_URL}/export_csv" class="btn btn-outline">↓ Export CSV</a>
