@@ -408,11 +408,19 @@ def append_new_rows_to_sheet(username, new_rows, year):
     """
     sheet = get_sheet(username, year)
 
-    # Same explicit-row-number approach as backfill: merged DATE cells can
-    # confuse append_rows()'s auto "next empty row" detection and cause it
-    # to insert mid-sheet instead of at the true end.
+    # Use col B (problem title — always filled, never blank from a merge)
+    # to find the true last used row.  Col A is unreliable because
+    # regroup_sheet() blanks it for merged date-group rows, so
+    # len(get_all_values()) over-counts and places new rows on top of
+    # existing ones when the sheet has any merged date blocks.
     existing = sheet.get_all_values()
-    next_row = len(existing) + 1
+    # Walk from the bottom to find the last row that has any non-blank cell.
+    last_used = 0
+    for i, row in enumerate(existing, start=1):
+        if any(cell.strip() for cell in row):
+            last_used = i
+    next_row = last_used + 1
+
     sheet.update(f"A{next_row}", new_rows, value_input_option="USER_ENTERED")
 
     # Recompute COUNT (col G) for every date across the sheet without
