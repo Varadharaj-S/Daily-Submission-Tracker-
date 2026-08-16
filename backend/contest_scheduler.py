@@ -20,23 +20,17 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(__file__))
 
 
-def _write_google_creds():
-    """Write GOOGLE_SERVICE_JSON env var to file if not already on disk
-    (contest sync writes results back to the roster/contest sheet)."""
-    creds_json = os.environ.get("GOOGLE_SERVICE_JSON", "")
-    creds_path = os.path.join(os.path.dirname(__file__), "google_creds.json")
-    if creds_json and not os.path.exists(creds_path):
-        try:
-            with open(creds_path, "w") as f:
-                f.write(creds_json)
-        except Exception as e:
-            print(f"[contest_scheduler] Could not write google_creds.json: {e}")
+# NOTE: this used to also write GOOGLE_SERVICE_JSON out to a
+# google_creds.json file next to this script. Nothing reads that file
+# back — contest.contest_sync (like every other Sheets call in this repo)
+# parses GOOGLE_SERVICE_JSON directly from the env var. On Vercel,
+# /var/task is read-only, so the write always failed and only added noise
+# to the function logs. Removed.
 
 
 def main():
     start = datetime.now()
     print(f"[contest_scheduler] tick start {start.strftime('%Y-%m-%d %H:%M:%S')}")
-    _write_google_creds()
     try:
         from contest.contest_sync import run_due_contests
         results = run_due_contests()

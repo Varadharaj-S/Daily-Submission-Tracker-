@@ -26,20 +26,19 @@ from database.db import get_db
 from utils.sync_schedule import is_due_for_auto_sync, now_ist
 
 
-# ── Google Service Account (env var or file) ──────────────────────────────────
-
-def _write_google_creds():
-    """Write GOOGLE_SERVICE_JSON env var to file if not already on disk."""
-    creds_json = os.environ.get("GOOGLE_SERVICE_JSON", "")
-    creds_path = os.path.join(os.path.dirname(__file__), "google_creds.json")
-    if creds_json and not os.path.exists(creds_path):
-        try:
-            with open(creds_path, "w") as f:
-                f.write(creds_json)
-            print("[scheduler] Wrote google_creds.json from env var.")
-        except Exception as e:
-            print(f"[scheduler] Could not write google_creds.json: {e}")
-    return creds_path if os.path.exists(creds_path) else None
+# ── Google Service Account (env var only) ──────────────────────────────────
+# NOTE: this used to also try to write GOOGLE_SERVICE_JSON out to a
+# google_creds.json file next to this script "for local/file-based auth".
+# Nothing ever reads that file back — every Sheets call in this codebase
+# (services/year_sheet_service.py, sync/sync_service.py, sheet_protect.py,
+# bot_sheet_sync.py, bot.py, lock_master_sheet.py) parses
+# GOOGLE_SERVICE_JSON directly from the env var with json.loads(). On
+# Vercel, /var/task is read-only, so that write always failed and spammed
+# "[scheduler] Could not write google_creds.json: [Errno 30] Read-only
+# file system" into the function logs on every cron tick — cosmetic noise
+# that looked like a real failure but never affected the actual sync.
+# Removed rather than fixed (e.g. writing to /tmp instead), since the file
+# was dead weight to begin with.
 
 
 # ── Sync-log helper ─────────────────────────────────────────────────────────
@@ -135,8 +134,6 @@ def sync_batch(after_id: int = 0, batch_size: int = None, concurrency: int = Non
     batch_size = batch_size or DAILY_SYNC_BATCH_SIZE
     concurrency = concurrency or SYNC_CONCURRENCY
 
-    _write_google_creds()
-
     with get_db() as db:
         rows = db.execute(
             """SELECT * FROM users
@@ -195,8 +192,6 @@ def main():
     print(f"\n{'='*55}")
     print(f"  DSA Tracker — Daily Scheduler  [{start.strftime('%Y-%m-%d %H:%M:%S')}]")
     print(f"{'='*55}\n")
-
-    _write_google_creds()
 
     # Fetch all active + verified users
     with get_db() as db:
