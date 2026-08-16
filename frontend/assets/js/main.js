@@ -49,19 +49,33 @@ function maybeShowAutoSyncPopup(lastSyncMsg) {
   }
 }
 
-// Poll while the dashboard tab is open, so a background sync that fires
-// mid-session shows up without the user needing to refresh. Auto-sync
-// itself only runs a few times a day per user (see utils/sync_schedule.py),
-// so a 60s poll is plenty responsive without hammering the backend.
+// Only check while the tab is actually visible/active — not on a
+// constant background timer, and not again right at page load (the
+// caller already checked the popup once for free using the last_sync_msg
+// that came back with the initial /dashboard load — see dashboard.html).
+// This fires only when the tab regains focus (switching back from
+// another tab/app), with a minimum gap between checks so rapid
+// tab-switching can't spam the endpoint. Keeps the popup working for an
+// open session (a background sync that fires mid-session still shows up
+// without the user needing to refresh) while cutting the request down to
+// only when it's actually useful — instead of every 60s even when the
+// tab is in the background or the user stepped away.
 function startAutoSyncPolling() {
-  setInterval(async () => {
+  const MIN_GAP_MS = 45000;
+  let lastCheck = Date.now(); // page load's own check just happened
+
+  document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState !== "visible") return;
+    const now = Date.now();
+    if (now - lastCheck < MIN_GAP_MS) return;
+    lastCheck = now;
     try {
       const status = await apiGet("/api/sync_status");
       maybeShowAutoSyncPopup(status && status.last_sync_msg);
     } catch (e) {
       // silent — this is a background nicety, not critical path
     }
-  }, 60000);
+  });
 }
 
 document.querySelectorAll(".toast").forEach((t, i) => {
