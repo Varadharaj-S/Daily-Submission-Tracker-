@@ -798,7 +798,18 @@ def sync_user_data(user, get_db):
     print("Fetching AC...")
     all_data.extend(fetch_ac(ac_handle))
 
+    # BUGFIX: this used to return here without touching the DB at all,
+    # which meant users.last_sync never got written by this code path —
+    # so the auto-sync scheduler had no way to tell "already synced
+    # today" from "never synced" (see utils/sync_schedule.py). Stamp
+    # last_sync on every run, even a no-new-data run.
+    now_iso = datetime.utcnow().isoformat(timespec="seconds")
+
     if not all_data:
+        conn = get_db()
+        conn.execute("UPDATE users SET last_sync=? WHERE id=?", (now_iso, user["id"]))
+        conn.commit()
+        conn.close()
         return {"success": False, "message": "No data fetched", "new_count": 0}
 
     conn = get_db()
@@ -860,6 +871,7 @@ def sync_user_data(user, get_db):
             new_count += 1
             new_rows.append(row[:7])  # keep the sheet's 7-column format — drop the hidden epoch
 
+    cursor.execute("UPDATE users SET last_sync=%s WHERE id=%s", (now_iso, user_id))
     conn.commit()
     conn.close()
 

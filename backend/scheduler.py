@@ -23,6 +23,7 @@ from datetime import datetime
 
 # ── DB helpers — shared PostgreSQL module ─────────────────────────────────────
 from database.db import get_db
+from utils.sync_schedule import is_due_for_auto_sync, now_ist
 
 
 # ── Google Service Account (env var or file) ──────────────────────────────────
@@ -119,8 +120,15 @@ def sync_batch(after_id: int = 0, batch_size: int = None, concurrency: int = Non
             (after_id, batch_size),
         ).fetchall()
 
-    users = [dict(u) if not isinstance(u, dict) else u for u in rows]
+    all_users = [dict(u) if not isinstance(u, dict) else u for u in rows]
     results = {"ok": 0, "fail": 0, "cookie_expired": 0}
+
+    # Only sync users whose configured Auto Sync Time has arrived (IST) and
+    # who haven't already been synced today — see utils/sync_schedule.py.
+    # Cursor/pagination below still advances over *all_users* (not just the
+    # due ones) so a quiet batch doesn't stall the Worker's paging loop.
+    ref = now_ist()
+    users = [u for u in all_users if is_due_for_auto_sync(u, ref)]
 
     if users:
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -145,11 +153,12 @@ def sync_batch(after_id: int = 0, batch_size: int = None, concurrency: int = Non
                     results["fail"] += 1
                     print(f"  ❌ {username}: {res.get('error', 'unknown')}")
 
-    next_cursor = users[-1]["id"] if users else after_id
-    done = len(users) < batch_size  # fewer rows than requested = reached the end
+    next_cursor = all_users[-1]["id"] if all_users else after_id
+    done = len(all_users) < batch_size  # fewer rows than requested = reached the end
 
     return {
         "processed": len(users),
+        "scanned": len(all_users),
         "next_cursor": next_cursor,
         "done": done,
         **results,
@@ -170,8 +179,11 @@ def main():
             "SELECT * FROM users WHERE status='active' AND is_verified=1 AND is_admin=0"
         ).fetchall()
 
-    users = [dict(u) if not isinstance(u, dict) else u for u in users]
-    print(f"[scheduler] Found {len(users)} active user(s) to sync "
+    all_users = [dict(u) if not isinstance(u, dict) else u for u in users]
+    ref = now_ist()
+    users = [u for u in all_users if is_due_for_auto_sync(u, ref)]
+    print(f"[scheduler] {len(all_users)} active user(s) scanned, "
+          f"{len(users)} due for auto-sync right now (IST {ref.strftime('%H:%M')}) "
           f"(concurrency={SYNC_CONCURRENCY}).\n")
 
     results = {"ok": 0, "fail": 0, "cookie_expired": 0}

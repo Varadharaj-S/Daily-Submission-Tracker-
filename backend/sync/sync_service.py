@@ -143,7 +143,17 @@ def sync_user_data(user, get_db, full_import=False):
     if "AtCoder" in enabled and ac_handle:
         all_subs.extend(fetch_ac(ac_handle, last_sync=last_sync))
 
+    # BUGFIX: this used to return here without ever touching the DB, which
+    # meant users.last_sync never got written — so incremental syncs never
+    # actually became incremental, and the auto-sync scheduler had no way
+    # to tell "already synced today" from "never synced". Stamp last_sync
+    # on every run (even a no-new-data run), then bail.
+    now_iso = datetime.utcnow().isoformat(timespec="seconds")
     if not all_subs:
+        conn = get_db()
+        conn.execute("UPDATE users SET last_sync=? WHERE id=?", (now_iso, uid))
+        conn.commit()
+        conn.close()
         return {"success": False, "message": "No new data fetched", "new_count": 0}
 
     # ── Write to PostgreSQL ──────────────────────────────────────────────────
@@ -165,6 +175,7 @@ def sync_user_data(user, get_db, full_import=False):
             new_count += 1
             new_rows.append(sub)
 
+    cur.execute("UPDATE users SET last_sync=? WHERE id=?", (now_iso, uid))
     conn.commit()
     conn.close()
 

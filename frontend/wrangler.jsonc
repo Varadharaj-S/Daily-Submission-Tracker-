@@ -11,16 +11,23 @@
   // and falls through to Assets for everything else.
   "main": "worker.js",
 
-  // Cron Trigger — this is the real daily auto-sync driver for this
-  // deployment (Cloudflare + Vercel only, no Render worker). Fires
-  // worker.js's scheduled() handler, which loops the backend's
-  // /api/cron/daily-sync batch endpoint until every active user is synced.
-  // Cloudflare Workers Free plan supports Cron Triggers (unlike Vercel
-  // Hobby, which is capped at once/day AND ~10s per invocation) — this can
-  // run as often as you like; twice a day (00:00 and 12:00 UTC) here.
+  // Cron Trigger — this is the real auto-sync driver for this deployment
+  // (Cloudflare + Vercel only, no Render worker). Fires worker.js's
+  // scheduled() handler, which loops the backend's /api/cron/daily-sync
+  // batch endpoint until every active user is scanned.
+  //
+  // BUGFIX: this used to be "0 0,12 * * *" (twice a day, fixed UTC times),
+  // which meant a user's per-account "Auto Sync Time" setting could never
+  // actually line up with when cron fired — the backend now checks each
+  // user's configured sync_time (see backend/utils/sync_schedule.py) on
+  // every tick and only syncs the ones whose time has arrived and who
+  // haven't synced yet today, so cron needs to run often enough to catch
+  // arbitrary HH:MM choices. Every 15 minutes here. Cloudflare Workers
+  // Free plan supports Cron Triggers (unlike Vercel Hobby, which is
+  // capped at once/day AND ~10s per invocation).
   // Requires CRON_SECRET set via: npx wrangler secret put CRON_SECRET
   "triggers": {
-    "crons": ["0 0,12 * * *"]
+    "crons": ["*/15 * * * *"]
   },
 
   // Static assets (all the HTML/CSS/JS files in frontend/)
