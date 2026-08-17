@@ -121,15 +121,22 @@ def _get_participants(platform):
 def _solved_problem_codes(db, user_id, platform, start_dt, end_dt):
     """Every distinct problem_id this student has an accepted-submission row
     for on this platform, with submitted_at inside the contest window.
+    Falls back to solved_on (date-level) for rows where submitted_at is NULL
+    — these are submissions synced before db_ops.py started capturing the
+    epoch timestamp (migration 0005 / the submitted_at NULL bug notes).
     Pure SQL against already-collected data — no network call."""
     rows = db.execute("""
         SELECT DISTINCT problem_id
         FROM submissions
         WHERE user_id = ?
           AND platform = ?
-          AND submitted_at IS NOT NULL
-          AND submitted_at BETWEEN ? AND ?
-    """, (user_id, platform, start_dt, end_dt)).fetchall()
+          AND (
+              (submitted_at IS NOT NULL AND submitted_at BETWEEN ? AND ?)
+              OR
+              (submitted_at IS NULL AND solved_on IS NOT NULL
+               AND solved_on BETWEEN DATE(?) AND DATE(?))
+          )
+    """, (user_id, platform, start_dt, end_dt, start_dt, end_dt)).fetchall()
     return {r["problem_id"] for r in rows}
 
 
