@@ -68,18 +68,16 @@ def insert_new_submissions(user_id, items):
     newly_inserted = []
     with get_db() as db:
         for item in items:
-            epoch = item.get("solved_epoch")
-            submitted_at = datetime.fromtimestamp(int(epoch)) if epoch else None
             row = db.execute("""
                 INSERT INTO submissions
-                (user_id, platform, problem_id, problem_name, problem_url, difficulty, tags, solved_date, solved_on, submitted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (user_id, platform, problem_id, problem_name, problem_url, difficulty, tags, solved_date, solved_on)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (user_id, platform, problem_id) DO NOTHING
                 RETURNING id
             """, (
                 user_id, item["platform"], item["problem_id"], item["problem_name"],
                 item["problem_url"], item["difficulty"], item["tags"], item["solved_date"],
-                solved_on_iso(item["solved_date"]), submitted_at
+                solved_on_iso(item["solved_date"])
             )).fetchone()
             if row is not None:
                 newly_inserted.append(item)
