@@ -17,6 +17,7 @@ import requests, time, json, re, os
 import pandas as pd
 from datetime import datetime, timedelta
 from collections import Counter
+from utils.helpers import solved_on_iso
 
 LC_GQL  = "https://leetcode.com/graphql"
 LC_API  = "https://leetcode.com/api/session/"
@@ -639,12 +640,12 @@ def import_lc_full(uid, lc_handle, lc_cookie, sheet_id, username, get_db_fn, lc_
             cur = db.execute("""
                 INSERT INTO submissions
                 (user_id,platform,problem_name,problem_id,
-                 problem_url,difficulty,tags,solved_date)
-                VALUES (?,?,?,?,?,?,?,?)
+                 problem_url,difficulty,tags,solved_date,solved_on)
+                VALUES (?,?,?,?,?,?,?,?,?)
                 ON CONFLICT (user_id, platform, problem_id) DO NOTHING
             """, (uid, "LeetCode", row["problem_name"], row["problem_id"],
                   row.get("problem_url", ""), row.get("difficulty", ""),
-                  row.get("tags", ""), row["solved_date"]))
+                  row.get("tags", ""), row["solved_date"], solved_on_iso(row["solved_date"])))
             saved += cur.rowcount
         db.commit()
     finally:

@@ -15,6 +15,7 @@ from extensions import app
 from database.db import get_db
 from utils.decorators import login_required, verified_required
 from workers.report_worker import run_weekly_report_for_user
+from services.progress_report_service import build_journey_report, set_journey_start_date
 
 
 @app.route("/weekly_report")
@@ -229,3 +230,82 @@ def weekly_csv():
 def api_weekly_report():
     run_weekly_report_for_user(current_user.id)
     return {"status": "started"}
+
+
+# ── Journey / Full Progress Report ──────────────────────────────────────────
+# Week-by-week report from the student's chosen start date to the current
+# week: total marks per week, a daily LeetCode done/not-done grid, and
+# weekly Codeforces/AtCoder done/not-done flags. See
+# services/progress_report_service.py for the actual computation — this
+# route just resolves who to report on (self, or admin viewing a student)
+# and hands off, same admin/self pattern as /weekly_report above.
+@app.route("/api/journey_report")
+@login_required
+@verified_required
+def api_journey_report():
+    from datetime import datetime as _dt
+
+    target_uid = request.args.get("uid")
+    if target_uid and current_user.is_admin:
+        try:
+            query_uid = int(target_uid)
+        except ValueError:
+            return jsonify({"error": "Invalid uid"}), 400
+    else:
+        query_uid = current_user.id
+
+    start_override = request.args.get("start")
+    start_date = None
+    if start_override:
+        try:
+            start_date = _dt.strptime(start_override, "%Y-%m-%d").date()
+        except ValueError:
+            return jsonify({"error": "start must be YYYY-MM-DD"}), 400
+
+    report = build_journey_report(query_uid, start_date=start_date)
+    if "error" in report:
+        return jsonify(report), 404
+
+    # Admin: list of all users for the picker (mirrors /weekly_report)
+    all_users = []
+    if current_user.is_admin:
+        with get_db() as db:
+            all_users = db.execute(
+                "SELECT id, username FROM users WHERE status='active' AND is_admin=0 ORDER BY username"
+            ).fetchall()
+
+    with get_db() as db:
+        target_user = db.execute(
+            "SELECT id, username, journey_start_date FROM users WHERE id=?", (query_uid,)
+        ).fetchone()
+
+    report["is_own_report"] = (query_uid == current_user.id)
+    report["target_user"] = dict(target_user) if target_user else None
+    report["all_users"] = [dict(u) for u in all_users]
+    return jsonify(report)
+
+
+@app.route("/api/journey_start", methods=["POST"])
+@login_required
+@verified_required
+def api_set_journey_start():
+    """Lets a student (or an admin, on a student's behalf via ?uid=) pick
+    the start date their journey/progress report should count weeks from."""
+    data = request.get_json() or {}
+    start = (data.get("start") or "").strip()
+    target_uid = data.get("uid")
+
+    if target_uid and current_user.is_admin:
+        try:
+            query_uid = int(target_uid)
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "message": "Invalid uid"}), 400
+    else:
+        query_uid = current_user.id
+
+    try:
+        saved = set_journey_start_date(query_uid, start)
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+
+    return jsonify({"success": True, "journey_start_date": saved})

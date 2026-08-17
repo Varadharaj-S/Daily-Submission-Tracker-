@@ -42,6 +42,7 @@ from filelock import FileLock
 from database.db import get_db
 from services.year_sheet_service import open_year_spreadsheet
 from sheet_protect import secure_user_tab
+from utils.helpers import solved_on_iso
 
 CREDENTIALS_FILE = "valiant-splicer-489013-q2-40d3ac23a2d8.json"
 
@@ -490,11 +491,12 @@ def write_submissions_batch(user_id, df):
             row[5],   # tags
             row[0],   # solved_date
             submitted_at,
+            solved_on_iso(row[0]),   # real DATE mirror — see utils/helpers.py
         ))
 
     insert_sql = """
 INSERT INTO submissions
-(user_id, problem_name, problem_id, problem_url, submission_url, platform, difficulty, tags, solved_date, submitted_at)
+(user_id, problem_name, problem_id, problem_url, submission_url, platform, difficulty, tags, solved_date, submitted_at, solved_on)
 VALUES %s
 ON CONFLICT (user_id, platform, problem_id)
 DO NOTHING
@@ -514,8 +516,8 @@ RETURNING id
             for params in insert_params:
                 cursor.execute("""
 INSERT INTO submissions
-(user_id, problem_name, problem_id, problem_url, submission_url, platform, difficulty, tags, solved_date, submitted_at)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+(user_id, problem_name, problem_id, problem_url, submission_url, platform, difficulty, tags, solved_date, submitted_at, solved_on)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (user_id, platform, problem_id)
 DO NOTHING
 """, params)

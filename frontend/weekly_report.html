@@ -36,6 +36,47 @@
 .breakdown-table tr:last-child td{border-bottom:none}
 .rank-badge{display:inline-block;width:1.4rem;height:1.4rem;border-radius:50%;text-align:center;line-height:1.4rem;font-size:.72rem;font-weight:700}
 .rank-1{background:#fbbf24;color:#000} .rank-2{background:#94a3b8;color:#000} .rank-3{background:#cd7c4a;color:#fff} .rank-n{background:rgba(255,255,255,.08);color:var(--muted)}
+
+/* ── Report tab switcher ── */
+.report-tabs{display:flex;gap:.4rem;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:.3rem;margin-bottom:1.25rem;width:fit-content}
+.report-tab{border:none;background:none;color:var(--muted);font-family:inherit;font-size:.82rem;font-weight:700;padding:.5rem 1rem;border-radius:6px;cursor:pointer;transition:.15s}
+.report-tab.active{background:var(--accent);color:#000}
+.report-tab:not(.active):hover{color:var(--text);background:var(--bg3)}
+
+/* ── Journey report ── */
+.journey-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:1rem;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:1.25rem;margin-bottom:1.25rem}
+.js-num{font-size:1.9rem;font-weight:800;font-family:var(--mono);line-height:1}
+.js-label{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:.3rem}
+.journey-start-form{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:.85rem 1rem;margin-bottom:1.25rem}
+.journey-start-form label{font-size:.78rem;color:var(--muted);font-weight:600}
+.journey-start-form input[type=date]{background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:.4rem .6rem;font-family:inherit;font-size:.82rem}
+.week-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:1.1rem 1.25rem;margin-bottom:1rem}
+.week-card.status-done{border-color:rgba(52,211,153,.4)}
+.week-card.status-notdone{border-color:rgba(248,113,113,.35)}
+.week-card.status-progress{border-color:rgba(251,191,36,.4)}
+.week-card-top{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.6rem;margin-bottom:.85rem}
+.week-title{font-weight:800;font-size:.95rem}
+.week-range{font-size:.72rem;color:var(--muted);font-family:var(--mono);margin-top:.15rem}
+.week-marks{text-align:right}
+.week-marks .wm-num{font-size:1.7rem;font-weight:800;font-family:var(--mono);color:var(--accent)}
+.week-marks .wm-label{font-size:.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.status-pill{display:inline-block;padding:.25rem .7rem;border-radius:20px;font-size:.7rem;font-weight:800;letter-spacing:.03em;text-transform:uppercase}
+.status-pill.done{background:rgba(52,211,153,.16);color:#34d399}
+.status-pill.notdone{background:rgba(248,113,113,.16);color:#f87171}
+.status-pill.progress{background:rgba(251,191,36,.16);color:#fbbf24}
+.day-grid{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.85rem}
+.day-pill{width:3.4rem;text-align:center;padding:.4rem .2rem;border-radius:8px;background:var(--bg3);border:1px solid var(--border2)}
+.day-pill .dp-label{font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+.day-pill .dp-mark{font-size:1.05rem;margin-top:.15rem;line-height:1}
+.day-pill.dp-done{background:rgba(52,211,153,.1);border-color:rgba(52,211,153,.35)}
+.day-pill.dp-missed{background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.25)}
+.day-pill.dp-future{opacity:.4}
+.day-pill.dp-today{box-shadow:0 0 0 2px var(--accent) inset}
+.week-flags{display:flex;gap:.5rem;flex-wrap:wrap}
+.flag-badge{font-size:.72rem;padding:.3rem .65rem;border-radius:6px;font-weight:700;display:inline-flex;align-items:center;gap:.3rem}
+.flag-yes{background:rgba(52,211,153,.14);color:#34d399}
+.flag-no{background:rgba(248,113,113,.14);color:#f87171}
+.journey-empty{text-align:center;padding:3rem 1rem;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -63,10 +104,37 @@ function buildReportUrl(overrides) {
   return "weekly_report.html?" + usp.toString();
 }
 
+function activeTab() {
+  return qs("tab") === "journey" ? "journey" : "week";
+}
+
+function buildTabUrl(tab) {
+  const usp = new URLSearchParams(window.location.search);
+  usp.set("tab", tab);
+  return "weekly_report.html?" + usp.toString();
+}
+
+const tabSwitcher = `
+<div class="report-tabs">
+  <a href="${buildTabUrl("week")}" class="report-tab ${activeTab() === "week" ? "active" : ""}" style="text-decoration:none;display:inline-block">📅 This Week</a>
+  <a href="${buildTabUrl("journey")}" class="report-tab ${activeTab() === "journey" ? "active" : ""}" style="text-decoration:none;display:inline-block">🗓 Full Journey</a>
+</div>`;
+
 (async () => {
   const me = await requireAuth({ verified: true });
   if (!me) return;
 
+  if (activeTab() === "journey") {
+    await renderJourneyReport(me);
+  } else {
+    await renderWeekReport(me);
+  }
+})();
+
+// ══════════════════════════════════════════════════════════════════════
+// This Week (existing single-week report)
+// ══════════════════════════════════════════════════════════════════════
+async function renderWeekReport(me) {
   const qsStr = window.location.search;
   const res = await apiGet(`/weekly_report${qsStr}`);
   const { report, history, view_all, user_breakdown, all_users, target_uid, user } = res;
@@ -127,6 +195,8 @@ function buildReportUrl(overrides) {
       <a href="dashboard.html" class="btn btn-outline">← Dashboard</a>
     </div>
   </div>
+
+  ${tabSwitcher}
 
   ${adminBar}
 
@@ -204,7 +274,156 @@ Streak    : 🔥 ${report.streak} active days</pre>
     const uid = new FormData(e.target).get("uid");
     window.location.href = buildReportUrl({ uid });
   });
-})();
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Full Journey (start date → current week, smart week-by-week view)
+// ══════════════════════════════════════════════════════════════════════
+function buildJourneyUrl(overrides) {
+  const cur = { uid: qs("uid") || "", start: qs("start") || "" };
+  const params = { ...cur, ...overrides };
+  const usp = new URLSearchParams();
+  usp.set("tab", "journey");
+  if (params.uid) usp.set("uid", params.uid);
+  if (params.start) usp.set("start", params.start);
+  return "weekly_report.html?" + usp.toString();
+}
+
+async function renderJourneyReport(me) {
+  document.getElementById("app").innerHTML = `
+    <div class="page-header">
+      <div><h2>🗓 Full Journey Report</h2><p class="page-sub">Loading your journey…</p></div>
+    </div>
+    ${tabSwitcher}
+    <div class="journey-empty">Crunching your daily/weekly progress…</div>`;
+
+  const uid = qs("uid");
+  const startOverride = qs("start");
+  let url = "/api/journey_report";
+  const params = [];
+  if (uid && me.is_admin) params.push(`uid=${encodeURIComponent(uid)}`);
+  if (startOverride) params.push(`start=${encodeURIComponent(startOverride)}`);
+  if (params.length) url += "?" + params.join("&");
+
+  const res = await apiGet(url);
+  if (res.error) {
+    document.getElementById("app").innerHTML = `
+      <div class="page-header"><h2>🗓 Full Journey Report</h2></div>
+      ${tabSwitcher}
+      <div class="journey-empty">⚠️ ${res.error}</div>`;
+    return;
+  }
+
+  const { summary, weeks, target_user, all_users, is_own_report } = res;
+
+  const adminBar = me.is_admin ? `
+  <div class="admin-report-bar">
+    <span class="admin-report-label">👑 Admin View:</span>
+    <a href="${buildJourneyUrl({ uid: "" })}" class="btn ${!uid ? "btn-primary" : "btn-outline"} btn-sm">👤 My Journey</a>
+    ${(all_users && all_users.length) ? `
+    <form id="journeyUserPick" style="display:flex;gap:.4rem;align-items:center;">
+      <select name="uid" class="form-input" style="padding:.3rem .6rem;font-size:.8rem;min-width:140px;">
+        <option value="">— View user —</option>
+        ${all_users.map(u => `<option value="${u.id}" ${String(uid) === String(u.id) ? "selected" : ""}>${u.username}</option>`).join("")}
+      </select>
+      <button type="submit" class="btn btn-outline btn-sm">Go</button>
+    </form>` : ""}
+  </div>` : "";
+
+  const startForm = `
+  <form id="journeyStartForm" class="journey-start-form">
+    <label>🚀 Journey start date</label>
+    <input type="date" name="start" value="${(target_user && target_user.journey_start_date) ? String(target_user.journey_start_date).slice(0,10) : summary.start_date}" max="${summary.today}">
+    <button type="submit" class="btn btn-primary btn-sm">Save & Rebuild Report</button>
+    <span style="font-size:.72rem;color:var(--muted)">Everything below is calculated week-by-week from this date up to today.</span>
+  </form>`;
+
+  const weekCards = weeks.slice().reverse().map(w => {
+    const statusCls = w.status === "Done" ? "status-done" : w.status === "Not Done" ? "status-notdone" : "status-progress";
+    const pillCls = w.status === "Done" ? "done" : w.status === "Not Done" ? "notdone" : "progress";
+    const days = w.days.map(d => {
+      let cls = "day-pill";
+      let mark = "·";
+      if (d.is_future) { cls += " dp-future"; mark = "—"; }
+      else if (d.leetcode_done) { cls += " dp-done"; mark = "✅"; }
+      else { cls += " dp-missed"; mark = "❌"; }
+      if (d.is_today) cls += " dp-today";
+      return `<div class="${cls}" title="${d.date}${d.problems_solved ? ` — ${d.problems_solved} solved` : ""}">
+        <div class="dp-label">${d.label}</div>
+        <div class="dp-mark">${mark}</div>
+      </div>`;
+    }).join("");
+
+    return `
+    <div class="week-card ${statusCls}">
+      <div class="week-card-top">
+        <div>
+          <div class="week-title">Week ${w.week_index} ${w.is_current_week ? '<span style="color:var(--accent);font-weight:700">(current)</span>' : ""}</div>
+          <div class="week-range">${w.week_start} → ${w.week_end}</div>
+        </div>
+        <div class="week-marks">
+          <div class="wm-num">${w.total_solved}</div>
+          <div class="wm-label">Total Marks</div>
+        </div>
+        <div><span class="status-pill ${pillCls}">${w.status}</span></div>
+      </div>
+      <div class="day-grid">${days}</div>
+      <div class="week-flags">
+        <span class="flag-badge ${w.leetcode_all_done ? "flag-yes" : "flag-no"}">🟨 LeetCode daily: ${w.leetcode_days_done}/${w.leetcode_days_elapsed} ${w.leetcode_all_done ? "done" : "not done"}</span>
+        <span class="flag-badge ${w.codeforces_done ? "flag-yes" : "flag-no"}">🟦 Codeforces: ${w.codeforces_done ? `done (${w.codeforces_count})` : "not done"}</span>
+        <span class="flag-badge ${w.atcoder_done ? "flag-yes" : "flag-no"}">🟩 AtCoder: ${w.atcoder_done ? `done (${w.atcoder_count})` : "not done"}</span>
+      </div>
+    </div>`;
+  }).join("");
+
+  document.getElementById("app").innerHTML = `
+  <div class="page-header">
+    <div>
+      <h2>🗓 Full Journey Report ${!is_own_report ? `<span style="font-size:.9rem;color:var(--muted)"> — ${summary.username}</span>` : ""}</h2>
+      <p class="page-sub">From <strong>${summary.start_date}</strong> to <strong>${summary.today}</strong> — ${summary.total_weeks} week${summary.total_weeks === 1 ? "" : "s"}</p>
+    </div>
+    <div class="header-actions"><a href="dashboard.html" class="btn btn-outline">← Dashboard</a></div>
+  </div>
+
+  ${tabSwitcher}
+  ${adminBar}
+
+  <div class="journey-summary">
+    <div><div class="js-num rs-accent">${summary.total_solved}</div><div class="js-label">Total Solved</div></div>
+    <div><div class="js-num rs-good">${summary.weeks_done}</div><div class="js-label">Weeks Done</div></div>
+    <div><div class="js-num rs-fire">${summary.weeks_not_done}</div><div class="js-label">Weeks Not Done</div></div>
+    <div><div class="js-num rs-warn">${summary.weeks_in_progress}</div><div class="js-label">In Progress</div></div>
+    <div><div class="js-num rs-good">🔥 ${summary.leetcode_current_streak}</div><div class="js-label">Current LC Streak</div></div>
+    <div><div class="js-num rs-accent">🏆 ${summary.leetcode_best_streak}</div><div class="js-label">Best LC Streak</div></div>
+  </div>
+
+  ${(!uid || me.is_admin) ? startForm : ""}
+
+  ${weeks.length ? weekCards : `<div class="journey-empty">No weeks to show yet — pick an earlier start date above.</div>`}
+  `;
+
+  const jForm = document.getElementById("journeyStartForm");
+  if (jForm) jForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const start = new FormData(e.target).get("start");
+    if (!start) return;
+    const body = { start };
+    if (uid && me.is_admin) body.uid = uid;
+    const r = await apiPostJSON("/api/journey_start", body);
+    if (r.success) {
+      window.location.href = buildJourneyUrl({ start: "" });
+    } else {
+      showToast(r.message || "Could not save start date.", "error");
+    }
+  });
+  const uForm = document.getElementById("journeyUserPick");
+  if (uForm) uForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const newUid = new FormData(e.target).get("uid");
+    window.location.href = buildJourneyUrl({ uid: newUid, start: "" });
+  });
+}
 </script>
 </body>
 </html>
+

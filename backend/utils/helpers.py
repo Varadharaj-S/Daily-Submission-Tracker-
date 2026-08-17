@@ -76,6 +76,18 @@ def _parse_any_date(value):
         return None
 
 
+def solved_on_iso(value):
+    """Parse a solved_date value (any of the formats this app has ever
+    written — see database/indexes.sql's note) into a 'YYYY-MM-DD' string
+    for the real `solved_on DATE` column, or None if unparseable. Every
+    INSERT INTO submissions call site should pass this alongside the
+    legacy solved_date TEXT so date-range report queries (weekly/journey
+    progress report, etc.) can filter on a real DATE instead of comparing
+    mismatched TEXT formats."""
+    dt = _parse_any_date(value)
+    return dt.strftime("%Y-%m-%d") if dt else None
+
+
 def _date_label(dt_obj, fallback="Unknown"):
     if not dt_obj:
         return fallback

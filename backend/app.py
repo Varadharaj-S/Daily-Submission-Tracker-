@@ -22,7 +22,7 @@ the assembly point:
 import os
 
 from extensions import app
-from database.db import init_db, ensure_extension_schema, ensure_year_schema, ensure_recommendation_schema, ensure_db_columns
+from database.db import init_db, ensure_extension_schema, ensure_year_schema, ensure_recommendation_schema, ensure_db_columns, ensure_solved_on_backfilled
 from services.tracker_service import ensure_tracker_schema
 from contest.contest_service import ensure_contest_schema
 
@@ -63,6 +63,14 @@ ensure_recommendation_schema()
 # on this page.
 ensure_db_columns()
 ensure_tracker_schema()
+
+# Journey/progress report feature (see services/progress_report_service.py):
+# backfills submissions.solved_on (real DATE) from the legacy free-form
+# solved_date TEXT column and defaults users.journey_start_date to each
+# user's signup date. Must run AFTER ensure_db_columns() above, which is
+# what actually creates those two columns on an existing DB. Idempotent —
+# safe on every cold start, see the function's own docstring.
+ensure_solved_on_backfilled()
 
 # ── Route modules (import for side-effect route registration) ───────────────
 from routes import auth            # noqa: E402,F401  /, /login, /signup, /logout, /admin/login, email verification

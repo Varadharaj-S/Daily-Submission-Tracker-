@@ -476,6 +476,24 @@ def ensure_db_columns():
         # scheduler.py::_log_auto_sync / services/scheduler_service.py and
         # routes/dashboard.py's last_sync_msg.
         "ALTER TABLE sync_logs ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'",
+        # Journey/progress report feature: the date a student's DSA journey
+        # officially "starts" from (student-chosen, defaults to their
+        # signup date if never set — see services/progress_report_service.py).
+        # Stored as a real DATE, not TEXT, since it's only ever set through
+        # our own date picker and never needs the legacy multi-format
+        # tolerance solved_date has.
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS journey_start_date DATE",
+        # Real DATE mirror of submissions.solved_date (see indexes.sql's
+        # long-standing note: solved_date is free-form TEXT in either
+        # DD-MM-YYYY (normal_sync.py's production sync path) or YYYY-MM-DD
+        # (bot_sheet_sync.py / sync/*.py / services/incremental_sync/),
+        # so BETWEEN/ORDER BY on it sorts lexicographically and silently
+        # mixes formats. solved_on is the real, unambiguous DATE the new
+        # progress report (and any future date-range query) should filter
+        # on instead. Backfilled + kept in sync by
+        # ensure_solved_on_backfilled() below; every INSERT into
+        # submissions now also writes it going forward.
+        "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS solved_on DATE",
     ]
     for stmt in stmts:
         try:
@@ -484,3 +502,52 @@ def ensure_db_columns():
                 db.commit()
         except Exception as e:
             print(f"[ensure_db_columns] statement failed, continuing: {stmt!r}: {e}")
+
+
+def ensure_solved_on_backfilled():
+    """One-time (but idempotent/self-healing, like everything else in this
+    file) backfill of submissions.solved_on from the legacy free-form
+    solved_date TEXT column, for every row that doesn't have it yet. Safe
+    to run on every cold start: the WHERE solved_on IS NULL guard means a
+    fully-backfilled DB does a cheap no-op scan, not a rewrite.
+
+    Handles the two formats that actually occur in this DB (see the note
+    on solved_date above): 'DD-MM-YYYY' and 'YYYY-MM-DD'. Rows whose
+    solved_date doesn't match either pattern (or is NULL/blank) are left
+    with solved_on = NULL rather than guessed at — callers that need a
+    date should treat NULL solved_on as "unknown", not "missing data".
+    """
+    try:
+        with get_db() as db:
+            db.execute("""
+                UPDATE submissions
+                SET solved_on = CASE
+                    WHEN solved_date ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN solved_date::date
+                    WHEN solved_date ~ '^\\d{2}-\\d{2}-\\d{4}$' THEN to_date(solved_date, 'DD-MM-YYYY')
+                    WHEN solved_date ~ '^\\d{2}/\\d{2}/\\d{4}$' THEN to_date(solved_date, 'DD/MM/YYYY')
+                    ELSE NULL
+                END
+                WHERE solved_on IS NULL AND COALESCE(solved_date,'') != ''
+            """)
+            db.commit()
+    except Exception as e:
+        print(f"[ensure_solved_on_backfilled] backfill failed, continuing: {e}")
+
+    try:
+        with get_db() as db:
+            db.execute("CREATE INDEX IF NOT EXISTS idx_sub_user_solved_on ON submissions(user_id, solved_on)")
+            db.commit()
+    except Exception as e:
+        print(f"[ensure_solved_on_backfilled] index creation failed, continuing: {e}")
+
+    try:
+        with get_db() as db:
+            db.execute("""
+                UPDATE users
+                SET journey_start_date = substring(created_at from 1 for 10)::date
+                WHERE journey_start_date IS NULL
+                  AND created_at ~ '^\\d{4}-\\d{2}-\\d{2}'
+            """)
+            db.commit()
+    except Exception as e:
+        print(f"[ensure_solved_on_backfilled] journey_start_date default failed, continuing: {e}")

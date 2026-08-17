@@ -13,6 +13,7 @@ contest_sheet.py, for the separate contest tracker) ever writes to.
 from datetime import datetime
 
 from database.db import get_db
+from utils.helpers import solved_on_iso
 
 PLATFORM_SYNC_COLUMN = {
     "Codeforces": "last_cf_sync",
@@ -69,13 +70,14 @@ def insert_new_submissions(user_id, items):
         for item in items:
             row = db.execute("""
                 INSERT INTO submissions
-                (user_id, platform, problem_id, problem_name, problem_url, difficulty, tags, solved_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (user_id, platform, problem_id, problem_name, problem_url, difficulty, tags, solved_date, solved_on)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (user_id, platform, problem_id) DO NOTHING
                 RETURNING id
             """, (
                 user_id, item["platform"], item["problem_id"], item["problem_name"],
-                item["problem_url"], item["difficulty"], item["tags"], item["solved_date"]
+                item["problem_url"], item["difficulty"], item["tags"], item["solved_date"],
+                solved_on_iso(item["solved_date"])
             )).fetchone()
             if row is not None:
                 newly_inserted.append(item)

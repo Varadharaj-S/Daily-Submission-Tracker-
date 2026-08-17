@@ -9,6 +9,7 @@ from datetime import datetime
 from sync.cf_service  import fetch_cf
 from sync.lc_service  import fetch_lc_cookie, fetch_lc_public
 from sync.ac_service  import fetch_ac
+from utils.helpers import solved_on_iso
 
 # ── Google Sheets ────────────────────────────────────────────────────────────
 try:
@@ -166,11 +167,12 @@ def sync_user_data(user, get_db, full_import=False):
         cur.execute("""
             INSERT INTO submissions
             (user_id, problem_name, problem_id, problem_url, platform,
-             difficulty, tags, solved_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             difficulty, tags, solved_date, solved_on)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (user_id, platform, problem_id) DO NOTHING
         """, (uid, sub["problem_name"], sub["problem_id"], sub["problem_url"],
-              sub["platform"], sub["difficulty"], sub.get("tags",""), sub["solved_date"]))
+              sub["platform"], sub["difficulty"], sub.get("tags",""), sub["solved_date"],
+              solved_on_iso(sub["solved_date"])))
         if cur.rowcount > 0:
             new_count += 1
             new_rows.append(sub)

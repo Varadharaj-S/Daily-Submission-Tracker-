@@ -15,6 +15,7 @@ from filelock import FileLock
 from database.db import get_db
 from datetime import datetime
 from google.oauth2.service_account import Credentials
+from utils.helpers import solved_on_iso
 
 # ===============================
 # CONFIG
@@ -779,7 +780,8 @@ for row in db_data.values.tolist():
         row[3],   # difficulty
         row[5],   # tags
         row[0],   # solved_date
-        submitted_at
+        submitted_at,
+        solved_on_iso(row[0]),   # real DATE mirror — see utils/helpers.py
     ))
 
 if _insert_params:
@@ -795,7 +797,8 @@ INSERT INTO submissions
     difficulty,
     tags,
     solved_date,
-    submitted_at
+    submitted_at,
+    solved_on
 )
 VALUES %s
 ON CONFLICT (user_id, platform, problem_id)
@@ -818,9 +821,9 @@ RETURNING id
 INSERT INTO submissions
 (
     user_id, problem_name, problem_id, problem_url, submission_url,
-    platform, difficulty, tags, solved_date, submitted_at
+    platform, difficulty, tags, solved_date, submitted_at, solved_on
 )
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (user_id, platform, problem_id)
 DO NOTHING
 """, params)

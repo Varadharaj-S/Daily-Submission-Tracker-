@@ -9,6 +9,8 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 
+from utils.helpers import solved_on_iso
+
 # ================= CONFIG =================
 
 # PHASE 2: the old shared SHEET_ID constant is gone — spreadsheet IDs now
@@ -950,15 +952,30 @@ def sync_user_data(user, get_db):
     print(f"   CF={cf_handle or '(none)'}  LC={lc_handle or '(none)'}  AC={ac_handle or '(none)'}")
 
     all_data = []
+    platform_errors = []
 
-    print("Fetching CF...")
-    all_data.extend(fetch_cf(cf_handle))
-
-    print("Fetching LC...")
-    all_data.extend(fetch_lc(lc_handle))
-
-    print("Fetching AC...")
-    all_data.extend(fetch_ac(ac_handle))
+    # BUGFIX (per-user sync robustness): each fetch_* used to run
+    # sequentially with no isolation — fetch_cf/fetch_lc/fetch_ac mostly
+    # catch their own network/API errors internally and return [], but an
+    # unexpected exception (a malformed API record, a KeyError on a
+    # missing field, etc.) in ANY one of them used to propagate straight
+    # out of sync_user_data and abort the whole run — so a single bad CF
+    # submission could silently stop that user's LC and AC from ever being
+    # fetched too, with no trace beyond a crashed background thread. Each
+    # platform now gets its own try/except: one platform failing can never
+    # take the other two down with it, and the failure is recorded (both
+    # printed and returned) instead of swallowed.
+    for label, fn, handle in (
+        ("CF", fetch_cf, cf_handle),
+        ("LC", fetch_lc, lc_handle),
+        ("AC", fetch_ac, ac_handle),
+    ):
+        print(f"Fetching {label}...")
+        try:
+            all_data.extend(fn(handle))
+        except Exception as e:
+            print(f"[{label} ERROR] sync_user_data: unexpected failure, continuing with other platforms: {e}")
+            platform_errors.append(f"{label} failed: {e}")
 
     # BUGFIX: this used to return here without touching the DB at all,
     # which meant users.last_sync never got written by this code path —
@@ -972,7 +989,10 @@ def sync_user_data(user, get_db):
         conn.execute("UPDATE users SET last_sync=? WHERE id=?", (now_iso, user["id"]))
         conn.commit()
         conn.close()
-        return {"success": False, "message": "No data fetched", "new_count": 0}
+        msg = "No data fetched"
+        if platform_errors:
+            msg += " (" + "; ".join(platform_errors) + ")"
+        return {"success": False, "message": msg, "new_count": 0}
 
     conn = get_db()
     cursor = conn.cursor()
@@ -1013,9 +1033,10 @@ def sync_user_data(user, get_db):
                     difficulty,
                     tags,
                     solved_date,
-                    submitted_at
+                    submitted_at,
+                    solved_on
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (user_id, platform, problem_id) DO NOTHING
                 """, (
                     user_id,
@@ -1026,7 +1047,8 @@ def sync_user_data(user, get_db):
                     row[3],      # difficulty
                     row[5],      # <-- TAGS
                     row[0],      # solved_date
-                    submitted_at
+                    submitted_at,
+                    solved_on_iso(row[0]),   # real DATE mirror — see utils/helpers.py
                 ))
 
         if cursor.rowcount > 0:
@@ -1087,10 +1109,16 @@ def sync_user_data(user, get_db):
     message = f"{new_count} new problems added"
     if sheet_msg:
         message += f" | {sheet_msg}"
+    if platform_errors:
+        # Partial success: some platform(s) fetched fine and got saved
+        # above (new_count/new_rows reflect that), one or more others
+        # threw. Surface it instead of a silent gap in the user's data.
+        message += " | ⚠️ " + "; ".join(platform_errors)
 
     return {
         "success": True,
         "sheet_synced": sheet_ok,
         "message": message,
-        "new_count": new_count
+        "new_count": new_count,
+        "platform_errors": platform_errors,
     }
