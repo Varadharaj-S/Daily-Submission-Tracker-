@@ -69,8 +69,7 @@ def ensure_contest_schema():
             status       TEXT        NOT NULL DEFAULT 'Upcoming',
             sheet_name   TEXT        DEFAULT 'Student_Contest',
             created_by   INTEGER     REFERENCES users(id) ON DELETE SET NULL,
-            created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-            UNIQUE (contest_code)
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
         );
         CREATE INDEX IF NOT EXISTS idx_contest_events_date   ON contest_events(contest_date DESC);
         CREATE INDEX IF NOT EXISTS idx_contest_events_status ON contest_events(status);
@@ -106,6 +105,34 @@ def ensure_contest_schema():
         -- contests created before this column existed; never guessed.
         ALTER TABLE contest_events ADD COLUMN IF NOT EXISTS cohort_year TEXT;
         CREATE INDEX IF NOT EXISTS idx_contest_events_cohort_year ON contest_events(cohort_year);
+
+        -- BUG FIX: contest_code was UNIQUE on its own (see the CREATE TABLE
+        -- above, before this fix), so a code like 'abc466' could only ever
+        -- be used ONCE across every cohort year in the whole DB — creating
+        -- it for 2028 permanently blocked 2029/2030 from ever using the
+        -- same AtCoder/Codeforces/LeetCode contest code, even though each
+        -- year has its own Student_Contest sheet and its own contest_id.
+        -- The real uniqueness boundary is (contest_code, cohort_year), not
+        -- contest_code alone. DROP the old single-column constraint (name
+        -- is Postgres's default "<table>_<column>_key") and replace it —
+        -- wrapped in a DO block since this table already exists in
+        -- production and CREATE TABLE IF NOT EXISTS above is a no-op on it.
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'contest_events_contest_code_key'
+            ) THEN
+                ALTER TABLE contest_events DROP CONSTRAINT contest_events_contest_code_key;
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'contest_events_code_cohort_key'
+            ) THEN
+                ALTER TABLE contest_events
+                    ADD CONSTRAINT contest_events_code_cohort_key UNIQUE (contest_code, cohort_year);
+            END IF;
+        END $$;
 
         CREATE TABLE IF NOT EXISTS contest_sync_log (
             id          SERIAL  PRIMARY KEY,
@@ -149,11 +176,16 @@ def create_contest(contest_name, contest_code, platform, contest_date,
     services.year_sheet_service.is_year_configured() before this runs."""
     contest_code = normalize_contest_code(contest_code)
     with get_db() as db:
+        # Uniqueness is (contest_code, cohort_year), not contest_code alone —
+        # the same AtCoder/Codeforces/LeetCode contest code is legitimately
+        # reused across cohort years, each with its own contest_id and its
+        # own year's Student_Contest sheet. See the DB constraint fix above.
         existing = db.execute(
-            "SELECT id FROM contest_events WHERE contest_code=?", (contest_code,)
+            "SELECT id FROM contest_events WHERE contest_code=? AND cohort_year=?",
+            (contest_code, cohort_year)
         ).fetchone()
         if existing:
-            return None, f"Contest code '{contest_code}' already exists."
+            return None, f"Contest code '{contest_code}' already exists for {cohort_year}."
 
         db.execute("""
             INSERT INTO contest_events
@@ -165,8 +197,12 @@ def create_contest(contest_name, contest_code, platform, contest_date,
               "Student_Contest", created_by, cohort_year))
         db.commit()
 
+        # Filtered by cohort_year too — without it this could fetch back
+        # the WRONG year's row when the same contest_code exists for more
+        # than one cohort (exactly what this fix now allows).
         row = db.execute(
-            "SELECT * FROM contest_events WHERE contest_code=?", (contest_code,)
+            "SELECT * FROM contest_events WHERE contest_code=? AND cohort_year=?",
+            (contest_code, cohort_year)
         ).fetchone()
     return row, None
 
