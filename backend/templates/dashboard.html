@@ -68,10 +68,6 @@
 
 {% endif %}
 
-    {% if sheet_url %}
-    <a href="{{ sheet_url }}" target="_blank" class="btn btn-outline">📊 Open Sheet</a>
-    {% endif %}
-
     <a href="{{ url_for('my_sheet') }}" target="_blank" class="btn btn-outline" title="Open your tab in the shared Google Sheet">📄 My Sheet</a>
     <a href="{{ url_for('daily_tracker') }}" class="btn btn-outline">📘 Daily Tracker</a>
     <a href="{{ url_for('export_csv') }}" class="btn btn-outline">↓ Export CSV</a>
