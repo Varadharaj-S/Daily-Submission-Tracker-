@@ -35,6 +35,10 @@
   .sync-cell small{color:var(--muted);font-size:.72rem}
   .row-actions{display:flex;gap:.4rem;flex-wrap:wrap}
   .empty-state{text-align:center;padding:2.5rem 1rem;color:var(--muted)}
+  .year-tabs{display:flex;gap:.4rem;flex-wrap:wrap;margin:0 0 1rem}
+  .year-tab{padding:.4rem .9rem;border-radius:999px;border:1px solid var(--border2);background:var(--bg3);color:var(--muted);font-size:.85rem;cursor:pointer}
+  .year-tab.active{background:#fbbf24;color:#111;border-color:#fbbf24;font-weight:700}
+  .year-tab:hover:not(.active){color:#fff}
 </style>
 </head>
 <body>
@@ -49,10 +53,26 @@
 <script src="assets/js/app.js"></script>
 <script>
 let CONTESTS_DATA;
+// Year selected via the tab bar. null/"" = "All" (no cohort_year filter).
+// Kept client-side only — the source of truth for which years EXIST is
+// always the DB (year_sheets, via list_configured_years(); each contest's
+// own cohort_year is stamped once at creation, see contest_service.py) —
+// this variable just remembers which tab is active in the browser.
+let SELECTED_YEAR = null;
 
 function renderContestDashboard() {
-  const { contests, counts, total_contests } = CONTESTS_DATA;
+  const { contests, counts, total_contests, years } = CONTESTS_DATA;
   const app = document.getElementById("app");
+
+  const yearTabs = (years && years.length) ? `
+    <div class="year-tabs">
+      <span class="year-tab ${!SELECTED_YEAR ? "active" : ""}" onclick="selectYear('')">All years</span>
+      ${years.map(y => `<span class="year-tab ${SELECTED_YEAR === y ? "active" : ""}" onclick="selectYear('${y}')">${y}</span>`).join("")}
+    </div>` : "";
+
+  const emptyMsg = SELECTED_YEAR
+    ? `No contests yet for <strong>${SELECTED_YEAR}</strong>. <a href="contest_create.html">Create one</a>.`
+    : `No contests yet. <a href="contest_create.html">Create your first contest</a>.`;
 
   app.innerHTML = `
   <div class="contest-wrap">
@@ -65,9 +85,11 @@ function renderContestDashboard() {
       <div class="row-actions">
         <a href="contest_create.html" class="btn btn-primary">+ Create Contest</a>
         <a href="contest_history.html" class="btn btn-outline">📜 History</a>
-        <button type="button" class="btn btn-outline" id="refreshSheetBtn" onclick="refreshSheet()">🔄 Refresh Sheet</button>
+        <button type="button" class="btn btn-outline" id="refreshSheetBtn" onclick="refreshSheet()" title="${SELECTED_YEAR ? `Refresh the ${SELECTED_YEAR} sheet` : "Pick a year tab first"}">🔄 Refresh Sheet</button>
       </div>
     </div>
+
+    ${yearTabs}
 
     <div class="grid-4">
       <div class="mini-card"><div class="k">Total Contests</div><div class="v">${total_contests}</div></div>
@@ -77,7 +99,7 @@ function renderContestDashboard() {
     </div>
 
     <div class="section-card">
-      <h3>All Contests</h3>
+      <h3>All Contests${SELECTED_YEAR ? ` — ${SELECTED_YEAR}` : ""}</h3>
       ${(contests && contests.length) ? `
       <div class="table-wrap">
         <table>
@@ -111,7 +133,7 @@ function renderContestDashboard() {
         </table>
       </div>` : `
       <div class="empty-state">
-        No contests yet. <a href="contest_create.html">Create your first contest</a>.
+        ${emptyMsg}
       </div>`}
     </div>
 
@@ -133,8 +155,24 @@ function syncCell(c) {
 }
 
 async function loadContestDashboard() {
-  CONTESTS_DATA = await apiGet("/student_contest");
+  const qs = SELECTED_YEAR ? `?year=${encodeURIComponent(SELECTED_YEAR)}` : "";
+  CONTESTS_DATA = await apiGet(`/student_contest${qs}`);
+  // First load only: default the tab bar to the most recent configured
+  // year (years come back sorted ascending, see year_sheet_service.py's
+  // "ORDER BY year") instead of leaving it on "All" — matches "touch
+  // panna avainga contest details varanum": picking a year should be the
+  // normal state, "All" is there for browsing across years.
+  if (SELECTED_YEAR === null) {
+    const years = CONTESTS_DATA.years || [];
+    SELECTED_YEAR = years.length ? years[years.length - 1] : "";
+    if (SELECTED_YEAR) return loadContestDashboard();
+  }
   renderContestDashboard();
+}
+
+function selectYear(year) {
+  SELECTED_YEAR = year || "";
+  loadContestDashboard();
 }
 
 async function deleteContest(cid, name) {
@@ -188,10 +226,20 @@ async function syncNow(cid, btn) {
 }
 
 async function refreshSheet() {
+  // "Refresh Sheet" targets ONE year's spreadsheet (routes/contest.py
+  // requires it) — this was the "same year problem": the button used to
+  // POST with no year at all, so the backend always rejected it with
+  // "Select a valid, configured year first." With no year selected
+  // ("All" tab), there's no single sheet to refresh, so ask instead of
+  // firing a request that's guaranteed to fail the same way.
+  if (!SELECTED_YEAR) {
+    showToast("Pick a year tab above first — Refresh Sheet targets one year's spreadsheet.", "error");
+    return;
+  }
   const btn = document.getElementById("refreshSheetBtn");
   if (btn) btn.disabled = true;
   try {
-    const d = await apiPostForm("/contest/refresh_sheet", {});
+    const d = await apiPostForm("/contest/refresh_sheet", { year: SELECTED_YEAR });
     showToast(d.message || (d.success ? "Refreshed" : "Failed"), d.success ? "success" : "error");
   } finally {
     if (btn) btn.disabled = false;

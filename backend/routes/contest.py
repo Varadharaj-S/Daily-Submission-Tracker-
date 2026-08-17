@@ -40,7 +40,16 @@ from services.year_sheet_service import is_year_configured, list_configured_year
 @login_required
 @admin_required
 def student_contest():
-    contests = contest_service.list_contests()
+    # Year tab at the top of the dashboard: ?year=2028 filters to that
+    # cohort_year only (contest_events.cohort_year, set once at creation —
+    # see contest_service.create_contest). An unfiltered request (no
+    # ?year=, e.g. the "All" tab) or a configured year with zero contests
+    # yet both return a normal 200 with an empty "contests" list — never
+    # the 400 "Select a valid, configured year first." error, which is
+    # reserved for routes that actually WRITE to a year's sheet (create,
+    # refresh_sheet) and need one unambiguous target.
+    year = (request.args.get("year") or "").strip()
+    contests = contest_service.list_contests(year=year or None)
     counts = {"Upcoming": 0, "Running": 0, "Completed": 0}
     for c in contests:
         counts[c["status"]] = counts.get(c["status"], 0) + 1
@@ -50,6 +59,7 @@ def student_contest():
         "counts": counts,
         "total_contests": len(contests),
         "years": list_configured_years(),
+        "selected_year": year,
     })
 
 
@@ -149,7 +159,8 @@ def contest_delete(cid):
 @login_required
 @admin_required
 def contest_history():
-    contests = contest_service.list_contests(status="Completed")
+    year = (request.args.get("year") or "").strip()
+    contests = contest_service.list_contests(status="Completed", year=year or None)
     return jsonify({"contests": contests})
 
 

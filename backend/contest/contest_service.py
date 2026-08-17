@@ -171,15 +171,29 @@ def create_contest(contest_name, contest_code, platform, contest_date,
     return row, None
 
 
-def list_contests(status=None):
-    """Returns all contests, freshest first, with status recomputed live
+def list_contests(status=None, year=None):
+    """Returns contests, freshest first, with status recomputed live
     (not trusted from the stored column — see contest_utils.compute_status).
     Every dict is passed through _serialize_row() so DATE/TIME columns are
-    plain strings by the time a route hands this to jsonify()."""
+    plain strings by the time a route hands this to jsonify().
+
+    `year`, when given, filters to that cohort_year only (see the
+    contest_events.cohort_year column — every contest already carries the
+    year it was created under, set once at creation and never guessed
+    later). No match just means that year has no contests yet — an empty
+    list, not an error; callers render that as an empty state."""
+    year = (str(year).strip() if year else None)
     with get_db() as db:
-        rows = db.execute(
-            "SELECT * FROM contest_events ORDER BY contest_date DESC, start_time DESC"
-        ).fetchall()
+        if year:
+            rows = db.execute(
+                "SELECT * FROM contest_events WHERE cohort_year=? "
+                "ORDER BY contest_date DESC, start_time DESC",
+                (year,)
+            ).fetchall()
+        else:
+            rows = db.execute(
+                "SELECT * FROM contest_events ORDER BY contest_date DESC, start_time DESC"
+            ).fetchall()
 
     contests = []
     for r in rows:
