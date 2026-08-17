@@ -58,7 +58,12 @@
           <label>Contest Date</label>
           <input type="date" name="contest_date" required>
         </div>
-        <div></div>
+        <div>
+          <label>Year / Cohort</label>
+          <select name="cohort_year" id="cohortYearSelect" required>
+            <option value="">Loading…</option>
+          </select>
+        </div>
         <div>
           <label>Start Time</label>
           <input type="time" name="start_time" required>
@@ -68,6 +73,9 @@
           <input type="time" name="end_time" required>
         </div>
       </div>
+      <p class="hint" id="noYearsHint" style="display:none;color:#f87171;margin-top:.6rem">
+        No year/cohort has a Google Sheet configured yet — set one up under Admin → Years before creating a contest.
+      </p>
       <div class="form-actions">
         <button type="submit" class="btn btn-primary" id="createBtn">Create Contest</button>
         <a href="contest_dashboard.html" class="btn btn-outline">Cancel</a>
@@ -103,6 +111,31 @@ document.getElementById("createContestForm").addEventListener("submit", async (e
 (async () => {
   const me = await requireAuth({ admin: true });
   if (!me) return;
+
+  // Year/cohort dropdown: the backend has required cohort_year on every
+  // contest for a while (a contest needs to know which year's Google
+  // Sheet to sync results into — see routes/contest.py), but this form
+  // never had a field for it, so every submission failed with "All
+  // fields are required, including year/cohort" no matter what the
+  // mentor filled in. Populate it from the same configured-years list
+  // the dashboard already uses.
+  const sel = document.getElementById("cohortYearSelect");
+  const hint = document.getElementById("noYearsHint");
+  try {
+    const d = await apiGet("/student_contest");
+    const years = d.years || [];
+    if (years.length) {
+      sel.innerHTML = `<option value="">— Select year/cohort —</option>` +
+        years.map(y => `<option value="${y}">${y}</option>`).join("");
+    } else {
+      sel.innerHTML = `<option value="">No years configured</option>`;
+      sel.disabled = true;
+      hint.style.display = "block";
+      document.getElementById("createBtn").disabled = true;
+    }
+  } catch (err) {
+    sel.innerHTML = `<option value="">Failed to load years</option>`;
+  }
 })();
 </script>
 </body>
