@@ -556,20 +556,57 @@ def _with_retry(fn, *args, retries=4, **kwargs):
 
 def _write_sheet_rebuild(user_sheet, sheet_rows):
     """sheet_rows: list of [DATE(dd-mm-yyyy), TITLE_CELL, LINK, DIFFICULTY, PLATFORM, TOPIC, COUNT].
-    Identical clear/rewrite/merge logic to bot_sheet_sync.py's write_sheet_import()."""
+    Identical clear/rewrite/merge logic to bot_sheet_sync.py's write_sheet_import(),
+    except the actual data write uses explicit cell ranges (A2, A502, ...) instead
+    of append_row/append_rows.
+
+    Why explicit ranges: user_sheet.clear() only wipes cell VALUES — it does not
+    remove merged cells left over from the previous rebuild's regroup step (DATE
+    and COUNT columns get merged for consecutive same-date rows). append_row /
+    append_rows ask the Sheets API "where does the existing table end?", and a
+    leftover empty merged range still counts as part of the table — so new rows
+    silently got appended starting AFTER that stale merge instead of at row 2,
+    i.e. the rebuild kept "continuing from the last position" instead of
+    starting fresh. Unmerging first removes that trap; writing to explicit
+    ranges removes the auto-detection entirely so it can't happen again even if
+    unmerge itself fails for some other reason.
+    """
     _with_retry(user_sheet.clear)
 
     try:
-        user_sheet.spreadsheet.batch_update({
-            "requests": [{"unmergeCells": {"range": {"sheetId": user_sheet.id}}}]
-        })
-    except Exception:
-        pass
+        _with_retry(
+            user_sheet.spreadsheet.batch_update,
+            {"requests": [{"unmergeCells": {"range": {"sheetId": user_sheet.id}}}]},
+        )
+    except Exception as e:
+        # Don't swallow this: if unmerge fails, stale merged ranges from the
+        # previous rebuild can still fool row auto-detection later, so a
+        # rebuild must be allowed to fail loudly here rather than silently
+        # writing rows into the wrong position.
+        print(f"❌ Could not unmerge cells before Sheet rebuild for '{user_sheet.title}': {e}")
+        raise
 
-    user_sheet.append_row(["DATE", "PROGRAM TITLE", "LINK", "DIFFICULTY", "PLATFORM", "TOPIC", "COUNT"])
+    _with_retry(
+        user_sheet.update,
+        "A1:G1",
+        [["DATE", "PROGRAM TITLE", "LINK", "DIFFICULTY", "PLATFORM", "TOPIC", "COUNT"]],
+        value_input_option="USER_ENTERED",
+    )
 
     if sheet_rows:
-        _with_retry(user_sheet.append_rows, sheet_rows, value_input_option="USER_ENTERED")
+        # Explicit row numbers, chunked, so this never depends on the Sheets
+        # API's guess about where the "table" ends.
+        CHUNK = 500
+        next_row = 2
+        for i in range(0, len(sheet_rows), CHUNK):
+            chunk = sheet_rows[i:i + CHUNK]
+            _with_retry(
+                user_sheet.update,
+                f"A{next_row}",
+                chunk,
+                value_input_option="USER_ENTERED",
+            )
+            next_row += len(chunk)
 
     time.sleep(1)
 
