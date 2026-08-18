@@ -250,6 +250,13 @@ def backfill_missing_rows_from_db(user_id, username, get_db, year):
         next_row += len(chunk)
         print(f"📄 Backfilled {min(i + CHUNK, len(rows))}/{len(rows)} rows for '{username}'")
 
+    # BUGFIX (date order / merge collapse) — same reasoning as
+    # append_new_rows_to_sheet: this backfill also always writes at the
+    # bottom, so missing historical rows getting caught up here can land
+    # below dates that are actually later. Re-sort the whole body by parsed
+    # date before recomputing COUNT/regroup so everything merges correctly.
+    _resort_sheet_body_by_date(sheet, username, step_label="backfill-resort")
+
     try:
         values = sheet.get_all_values()
         current_date = ""
@@ -397,6 +404,50 @@ def rebuild_user_sheet_from_db(user_id, username, get_db, year):
     return len(rows)
 
 
+def _resort_sheet_body_by_date(sheet, username, step_label="resort"):
+    """Shared by append_new_rows_to_sheet and backfill_missing_rows_from_db:
+    re-sort the sheet body (everything below the header) by parsed date and
+    write the exact same rows back in place, so a batch appended at the
+    bottom (which may be older than rows already above it) collapses back
+    into its correct chronological position and merges with any existing
+    same-date block instead of sitting apart from it. Non-destructive — same
+    row count, only reordered. See append_new_rows_to_sheet's docstring for
+    the full story on why this exists."""
+    try:
+        from utils.helpers import _parse_any_date
+
+        values = sheet.get_all_values()
+        if len(values) <= 1:
+            return
+
+        body = values[1:]
+
+        # Forward-fill column A (DATE): merged date-group rows have that
+        # cell blank on every row but the first in their block, and
+        # re-sorting rows individually would otherwise orphan those blanks
+        # from the date they actually belong to.
+        filled = []
+        current_date = ""
+        for row in body:
+            row = list(row) + [""] * (7 - len(row)) if len(row) < 7 else row[:7]
+            if row[0].strip():
+                current_date = row[0].strip()
+            else:
+                row[0] = current_date
+            filled.append(row)
+
+        def sort_key(row):
+            dt = _parse_any_date(row[0])
+            return dt or datetime.max  # unparseable dates sort last, not first
+
+        filled.sort(key=sort_key)
+
+        sheet.update(f"A2:G{len(values)}", filled, value_input_option="USER_ENTERED")
+    except Exception as e:
+        # Rows are already written and safe — only the reordering failed.
+        print(f"⚠️ Date {step_label} step failed for '{username}' (rows still saved): {e}")
+
+
 def append_new_rows_to_sheet(username, new_rows, year):
     """
     Non-destructive path used by every normal "Sync Now" call: only APPEND
@@ -424,6 +475,27 @@ def append_new_rows_to_sheet(username, new_rows, year):
     next_row = last_used + 1
 
     sheet.update(f"A{next_row}", new_rows, value_input_option="USER_ENTERED")
+
+    # BUGFIX (date order / merge collapse): this used to stop here and go
+    # straight to COUNT/regroup. That's exactly why old sheets ended up with
+    # dates all over the place and identical dates refusing to merge: each
+    # sync's batch only ever got tacked onto the very bottom of the sheet,
+    # regardless of whether those dates were older than rows already sitting
+    # above (e.g. a Codeforces solve from 3 days ago surfacing in today's
+    # fetch). Over many syncs the sheet degenerates into dozens of
+    # non-adjacent same-date blocks — and regroup_sheet() only ever merges
+    # CONTIGUOUS same-date rows by design (see its own comment), so all of
+    # those scattered duplicates stayed unmerged and visibly "everywhere".
+    #
+    # Fix: after appending (still non-destructive — nothing is cleared, no
+    # row count changes), re-sort the WHOLE sheet body by parsed date and
+    # write the exact same rows back in place, in date order. Same-date rows
+    # collapse back into one contiguous block wherever they came from, so
+    # every date merges correctly again, and the sheet reads chronologically
+    # top to bottom like it's supposed to. Ties keep their original relative
+    # order (Python's sort is stable) — untouched history isn't reshuffled
+    # for no reason, only re-grouped by date.
+    _resort_sheet_body_by_date(sheet, username, step_label="resort")
 
     # Recompute COUNT (col G) for every date across the sheet without
     # touching columns A-F — purely additive/overwrite on one column.
