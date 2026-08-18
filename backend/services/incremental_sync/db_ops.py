@@ -72,7 +72,7 @@ def insert_new_submissions(user_id, items):
                 INSERT INTO submissions
                 (user_id, platform, problem_id, problem_name, problem_url, difficulty, tags, solved_date, solved_on)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (user_id, platform, problem_id) DO NOTHING
+                ON CONFLICT (user_id, platform, problem_id, solved_on) DO NOTHING
                 RETURNING id
             """, (
                 user_id, item["platform"], item["problem_id"], item["problem_name"],

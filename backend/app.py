@@ -22,7 +22,7 @@ the assembly point:
 import os
 
 from extensions import app
-from database.db import init_db, ensure_extension_schema, ensure_year_schema, ensure_recommendation_schema, ensure_db_columns, ensure_solved_on_backfilled
+from database.db import init_db, ensure_extension_schema, ensure_year_schema, ensure_recommendation_schema, ensure_db_columns, ensure_solved_on_backfilled, ensure_submission_dedup_by_date
 from services.tracker_service import ensure_tracker_schema
 from contest.contest_service import ensure_contest_schema
 
@@ -71,6 +71,16 @@ ensure_tracker_schema()
 # what actually creates those two columns on an existing DB. Idempotent —
 # safe on every cold start, see the function's own docstring.
 ensure_solved_on_backfilled()
+
+# PHASE 5 FIX: submissions were de-duplicated on (user_id, platform,
+# problem_id) alone, so re-solving the same problem on a genuinely later
+# date was silently dropped forever — never reached the DB, never reached
+# the sheet. Swaps that for a (user_id, platform, problem_id, solved_on)
+# constraint: same problem + same date still collapses to a no-op, same
+# problem + a different date is now allowed through. Must run AFTER
+# ensure_solved_on_backfilled() above, since it depends on solved_on
+# being populated. See the function's own docstring in database/db.py.
+ensure_submission_dedup_by_date()
 
 # ── Route modules (import for side-effect route registration) ───────────────
 from routes import auth            # noqa: E402,F401  /, /login, /signup, /logout, /admin/login, email verification

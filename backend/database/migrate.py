@@ -158,6 +158,9 @@ def main():
         apply_sql_file(db, os.path.join(HERE, "migrations", "0007_year_wise_architecture.sql"))
         apply_sql_file(db, os.path.join(HERE, "migrations", "0008_recommendations.sql"))
         apply_sql_file(db, os.path.join(HERE, "migrations", "0009_leetcode_import_cursor.sql"))
+        apply_sql_file(db, os.path.join(HERE, "migrations", "0010_initial_import_completed.sql"))
+        apply_sql_file(db, os.path.join(HERE, "migrations", "0011_solved_on_and_journey_start.sql"))
+        apply_sql_file(db, os.path.join(HERE, "migrations", "0012_dedup_by_solved_date.sql"))
 
         print("Phase 1 migration complete.")
     except Exception:

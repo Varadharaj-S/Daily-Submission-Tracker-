@@ -498,7 +498,7 @@ def write_submissions_batch(user_id, df):
 INSERT INTO submissions
 (user_id, problem_name, problem_id, problem_url, submission_url, platform, difficulty, tags, solved_date, submitted_at, solved_on)
 VALUES %s
-ON CONFLICT (user_id, platform, problem_id)
+ON CONFLICT (user_id, platform, problem_id, solved_on)
 DO NOTHING
 RETURNING id
 """
@@ -518,7 +518,7 @@ RETURNING id
 INSERT INTO submissions
 (user_id, problem_name, problem_id, problem_url, submission_url, platform, difficulty, tags, solved_date, submitted_at, solved_on)
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-ON CONFLICT (user_id, platform, problem_id)
+ON CONFLICT (user_id, platform, problem_id, solved_on)
 DO NOTHING
 """, params)
                 if cursor.rowcount > 0:

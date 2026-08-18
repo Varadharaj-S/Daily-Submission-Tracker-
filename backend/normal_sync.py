@@ -1037,7 +1037,7 @@ def sync_user_data(user, get_db):
                     solved_on
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (user_id, platform, problem_id) DO NOTHING
+                ON CONFLICT (user_id, platform, problem_id, solved_on) DO NOTHING
                 """, (
                     user_id,
                     title,

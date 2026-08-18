@@ -801,7 +801,7 @@ INSERT INTO submissions
     solved_on
 )
 VALUES %s
-ON CONFLICT (user_id, platform, problem_id)
+ON CONFLICT (user_id, platform, problem_id, solved_on)
 DO NOTHING
 RETURNING id
 """
@@ -824,7 +824,7 @@ INSERT INTO submissions
     platform, difficulty, tags, solved_date, submitted_at, solved_on
 )
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-ON CONFLICT (user_id, platform, problem_id)
+ON CONFLICT (user_id, platform, problem_id, solved_on)
 DO NOTHING
 """, params)
             if cursor.rowcount > 0:

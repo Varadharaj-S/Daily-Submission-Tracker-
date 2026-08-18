@@ -642,7 +642,7 @@ def import_lc_full(uid, lc_handle, lc_cookie, sheet_id, username, get_db_fn, lc_
                 (user_id,platform,problem_name,problem_id,
                  problem_url,difficulty,tags,solved_date,solved_on)
                 VALUES (?,?,?,?,?,?,?,?,?)
-                ON CONFLICT (user_id, platform, problem_id) DO NOTHING
+                ON CONFLICT (user_id, platform, problem_id, solved_on) DO NOTHING
             """, (uid, "LeetCode", row["problem_name"], row["problem_id"],
                   row.get("problem_url", ""), row.get("difficulty", ""),
                   row.get("tags", ""), row["solved_date"], solved_on_iso(row["solved_date"])))

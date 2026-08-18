@@ -169,7 +169,7 @@ def sync_user_data(user, get_db, full_import=False):
             (user_id, problem_name, problem_id, problem_url, platform,
              difficulty, tags, solved_date, solved_on)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (user_id, platform, problem_id) DO NOTHING
+            ON CONFLICT (user_id, platform, problem_id, solved_on) DO NOTHING
         """, (uid, sub["problem_name"], sub["problem_id"], sub["problem_url"],
               sub["platform"], sub["difficulty"], sub.get("tags",""), sub["solved_date"],
               solved_on_iso(sub["solved_date"])))

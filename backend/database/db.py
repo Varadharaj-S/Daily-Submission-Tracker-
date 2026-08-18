@@ -551,3 +551,83 @@ def ensure_solved_on_backfilled():
             db.commit()
     except Exception as e:
         print(f"[ensure_solved_on_backfilled] journey_start_date default failed, continuing: {e}")
+
+
+def ensure_submission_dedup_by_date():
+    """PHASE 5 FIX: submissions used to be de-duplicated purely on
+    (user_id, platform, problem_id) — see the UNIQUE() in init_db()'s
+    baseline CREATE TABLE. Every INSERT's `ON CONFLICT (user_id, platform,
+    problem_id) DO NOTHING` relies on that constraint.
+
+    That was backwards from what re-solving a problem should do:
+    - Same problem, SAME date re-fetched (e.g. an overlapping incremental
+      sync window) → correctly a no-op, must stay blocked.
+    - Same problem, a genuinely DIFFERENT date (student solved it again
+      later) → was ALSO silently blocked forever, because problem_id alone
+      already "existed". The row never reached the DB, so it could never
+      reach the sheet either — no new row, no COUNT bump for that date.
+
+    FIX: swap the 3-column constraint for a 4-column one that also
+    includes solved_on (the real DATE column — see
+    ensure_solved_on_backfilled() above), so the same problem can be
+    logged again on a new date, while an exact same-day repeat still
+    collapses to a no-op. Every ON CONFLICT target across bot.py,
+    bot_sheet_sync.py, normal_sync.py, sync/chunked_import.py,
+    sync/sync_service.py and services/incremental_sync/db_ops.py was
+    updated to match this new 4-column target in the same pass.
+
+    Self-healing/idempotent like everything else in this file — safe to
+    run on every cold start. Must run AFTER ensure_solved_on_backfilled()
+    so solved_on is populated first (a NULL solved_on is treated as
+    "distinct" by Postgres' UNIQUE, so pre-existing rows with an
+    unparseable solved_date won't get bogus protection until backfilled —
+    same "NULL = unknown, not missing" tradeoff already documented there).
+
+    Drops whatever the OLD 3-column (user_id, platform, problem_id)
+    unique constraint is actually named (found dynamically via
+    pg_constraint instead of assuming Postgres' default auto-generated
+    name, in case it was ever renamed) before adding the new one, so the
+    old constraint can never sit alongside the new one and reject a
+    legitimate different-date insert with a raw IntegrityError that
+    ON CONFLICT (user_id, platform, problem_id, solved_on) wouldn't catch.
+    """
+    try:
+        with get_db() as db:
+            db.execute("""
+                DO $$
+                DECLARE
+                    r RECORD;
+                BEGIN
+                    FOR r IN
+                        SELECT con.conname
+                        FROM pg_constraint con
+                        JOIN pg_class rel ON rel.oid = con.conrelid
+                        WHERE rel.relname = 'submissions'
+                          AND con.contype = 'u'
+                          AND (
+                              SELECT array_agg(a.attname ORDER BY a.attname)
+                              FROM unnest(con.conkey) AS k(attnum)
+                              JOIN pg_attribute a
+                                ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+                          ) = ARRAY['platform','problem_id','user_id']::name[]
+                    LOOP
+                        EXECUTE format('ALTER TABLE submissions DROP CONSTRAINT %I', r.conname);
+                    END LOOP;
+                END $$;
+            """)
+            db.commit()
+    except Exception as e:
+        print(f"[ensure_submission_dedup_by_date] old constraint drop failed, continuing: {e}")
+
+    try:
+        with get_db() as db:
+            db.execute("""
+                ALTER TABLE submissions
+                ADD CONSTRAINT submissions_user_platform_problem_solved_on_key
+                UNIQUE (user_id, platform, problem_id, solved_on)
+            """)
+            db.commit()
+    except Exception as e:
+        # Already exists (re-run) or some other benign race — same
+        # try/except-and-continue pattern as ensure_db_columns() above.
+        print(f"[ensure_submission_dedup_by_date] new constraint add skipped, continuing: {e}")
