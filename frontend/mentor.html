@@ -355,7 +355,7 @@ function renderSearchResults() {
 
   document.getElementById("app").innerHTML = `
   <div class="page-header">
-    <div><h2>🎓 Mentor Mode</h2><p class="page-sub">Assign problems · Track progress · Give feedback</p></div>
+    <div><h2>🎓 Mentor Mode <span class="card-tag" style="vertical-align:middle">Batch ${CURRENT_YEAR}</span></h2><p class="page-sub">Assign problems · Track progress · Give feedback — everything below is scoped to ${CURRENT_YEAR} only</p></div>
     <a href="admin.html" class="btn btn-outline">← Admin Panel</a>
   </div>
 
@@ -386,9 +386,10 @@ function renderSearchResults() {
   <div id="tab-assign" class="mentor-tab-panel active">
     <div class="settings-card">
       <div class="settings-section">
-        <h3>📌 Assign Problem</h3>
-        <p class="section-desc">Assign a problem to a student with optional deadline.</p>
+        <h3>📌 Assign Problem <span class="card-tag">${CURRENT_YEAR}</span></h3>
+        <p class="section-desc">Assign a problem to a student with optional deadline. Only ${CURRENT_YEAR} students are listed below — switch batch with the Year buttons above to assign to a different year.</p>
         <form id="assignForm">
+          <input type="hidden" name="year" value="${CURRENT_YEAR}">
           <div class="form-group">
             <label class="form-label">Student</label>
             <select class="form-input" name="user_id" required>
@@ -428,7 +429,7 @@ function renderSearchResults() {
     <div class="settings-card">
       <div class="settings-section">
         <h3>🧩 Create Custom Problem</h3>
-        <p class="section-desc">Create a problem you can assign to any student.</p>
+        <p class="section-desc">Create a problem you can assign to any student in any batch (not year-specific — it's just a reusable template).</p>
         <form id="customProbForm">
           <div class="form-group"><label class="form-label">Title</label>
             <input class="form-input" type="text" name="title" placeholder="Problem title" required maxlength="200"></div>
@@ -451,8 +452,8 @@ function renderSearchResults() {
   <div id="tab-search" class="mentor-tab-panel">
     <div class="settings-card">
       <div class="settings-section">
-        <h3>🔍 Search Problem</h3>
-        <p class="section-desc">Search the whole database for a problem and see which students have solved it — student name, register number, problem name, problem link and Solved (Yes/No), one row per student.</p>
+        <h3>🔍 Search Problem <span class="card-tag">${CURRENT_YEAR}</span></h3>
+        <p class="section-desc">Search among ${CURRENT_YEAR} students for a problem and see who's solved it — student name, register number, problem name, problem link and Solved (Yes/No), one row per student. Switch batch with the Year buttons above to search a different year.</p>
         <form class="search-problem-form" onsubmit="runProblemSearch(event)">
           <div class="form-group"><label class="form-label">Problem Name</label>
             <input class="form-input" type="text" id="sp_name" placeholder="e.g. Two Sum" maxlength="200"></div>
@@ -468,7 +469,7 @@ function renderSearchResults() {
   <div class="table-card" style="margin-top:1rem">
     <div class="card-header" style="flex-wrap:wrap;gap:.5rem">
       <div style="display:flex;align-items:center;gap:.6rem">
-        <h3>📋 All Assignments</h3>
+        <h3>📋 All Assignments <span class="card-tag">${CURRENT_YEAR}</span></h3>
         <span class="count-pill">${(MENTOR_DATA.assignments || []).length}</span>
       </div>
       <div style="display:flex;gap:.5rem;flex-wrap:wrap">

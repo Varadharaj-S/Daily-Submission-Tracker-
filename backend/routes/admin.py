@@ -48,40 +48,96 @@ def _require_mentor_year():
 @login_required
 @admin_required
 def admin_dashboard():
+    """
+    PHASE 2 (batch isolation): supports an optional ?year=2028 filter,
+    same pattern as Mentor Mode's year switcher. When a year is given
+    (and is one of the actually-configured years), every list here —
+    students, logs, pending count, submission totals, analytics — is
+    scoped to ONLY that cohort, so switching from 2029 to 2028 never
+    shows the other batch's students or logs mixed in. With no year (or
+    an unrecognised one), it falls back to the old "everything, every
+    batch" view so nothing breaks for anyone not yet using cohorts.
+
+    Log scoping: admin_logs.target_user is a free-text username (not a
+    FK), so year-filtering it means joining on users.username — any log
+    row whose target isn't a student in this batch (backups, full
+    resyncs, year-sheet management, etc.) simply won't show up under a
+    specific year. That's intentional: those aren't per-batch events.
+    """
+    configured_years = list_configured_years()
+    year = sanitize(str(request.args.get("year") or ""), 16)
+    if year and year not in configured_years:
+        year = ""  # unknown/typo'd year — fall back to the all-batches view
 
     with get_db() as db:
-        users   = db.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
+        if year:
+            users = db.execute(
+                "SELECT * FROM users WHERE cohort_year=? ORDER BY created_at DESC", (year,)
+            ).fetchall()
+        else:
+            users = db.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
+
         counts  = {u["id"]: db.execute(
             "SELECT COUNT(*) as c FROM submissions WHERE user_id=?",
             (u["id"],)
         ).fetchone()["c"] for u in users}
-        pending = db.execute(
-            "SELECT COUNT(*) as c FROM users WHERE status='pending'"
-        ).fetchone()["c"]
-        total_subs = db.execute(
-            "SELECT COUNT(*) as c FROM submissions"
-        ).fetchone()["c"]
-        logs = db.execute(
-            "SELECT * FROM admin_logs ORDER BY created_at DESC LIMIT 30"
-        ).fetchall()
 
-        # Analytics: signups per day (last 14 days)
-        signups_raw = db.execute("""
-            SELECT to_char(created_at::date, 'YYYY-MM-DD') as day, COUNT(*) as cnt
-            FROM users WHERE created_at::date >= CURRENT_DATE - INTERVAL '14 days'
-            GROUP BY created_at::date ORDER BY created_at::date
-        """).fetchall()
-        # Problems solved per day (last 14 days)
-        probs_raw = db.execute("""
-            SELECT solved_date, COUNT(*) as cnt
-            FROM submissions
-            GROUP BY solved_date
-            ORDER BY solved_date DESC LIMIT 14
-        """).fetchall()
-
-        active_users = db.execute(
-            "SELECT COUNT(*) as c FROM users WHERE status='active'"
-        ).fetchone()["c"]
+        if year:
+            pending = db.execute(
+                "SELECT COUNT(*) as c FROM users WHERE status='pending' AND cohort_year=?", (year,)
+            ).fetchone()["c"]
+            total_subs = db.execute(
+                "SELECT COUNT(*) as c FROM submissions s JOIN users u ON u.id=s.user_id WHERE u.cohort_year=?",
+                (year,)
+            ).fetchone()["c"]
+            active_users = db.execute(
+                "SELECT COUNT(*) as c FROM users WHERE status='active' AND cohort_year=?", (year,)
+            ).fetchone()["c"]
+            logs = db.execute("""
+                SELECT al.* FROM admin_logs al
+                JOIN users u ON u.username = al.target_user
+                WHERE u.cohort_year = ?
+                ORDER BY al.created_at DESC LIMIT 30
+            """, (year,)).fetchall()
+            signups_raw = db.execute("""
+                SELECT to_char(created_at::date, 'YYYY-MM-DD') as day, COUNT(*) as cnt
+                FROM users WHERE created_at::date >= CURRENT_DATE - INTERVAL '14 days'
+                  AND cohort_year=?
+                GROUP BY created_at::date ORDER BY created_at::date
+            """, (year,)).fetchall()
+            probs_raw = db.execute("""
+                SELECT solved_date, COUNT(*) as cnt
+                FROM submissions s JOIN users u ON u.id = s.user_id
+                WHERE u.cohort_year=?
+                GROUP BY solved_date
+                ORDER BY solved_date DESC LIMIT 14
+            """, (year,)).fetchall()
+        else:
+            pending = db.execute(
+                "SELECT COUNT(*) as c FROM users WHERE status='pending'"
+            ).fetchone()["c"]
+            total_subs = db.execute(
+                "SELECT COUNT(*) as c FROM submissions"
+            ).fetchone()["c"]
+            active_users = db.execute(
+                "SELECT COUNT(*) as c FROM users WHERE status='active'"
+            ).fetchone()["c"]
+            logs = db.execute(
+                "SELECT * FROM admin_logs ORDER BY created_at DESC LIMIT 30"
+            ).fetchall()
+            # Analytics: signups per day (last 14 days)
+            signups_raw = db.execute("""
+                SELECT to_char(created_at::date, 'YYYY-MM-DD') as day, COUNT(*) as cnt
+                FROM users WHERE created_at::date >= CURRENT_DATE - INTERVAL '14 days'
+                GROUP BY created_at::date ORDER BY created_at::date
+            """).fetchall()
+            # Problems solved per day (last 14 days)
+            probs_raw = db.execute("""
+                SELECT solved_date, COUNT(*) as cnt
+                FROM submissions
+                GROUP BY solved_date
+                ORDER BY solved_date DESC LIMIT 14
+            """).fetchall()
 
         custom_probs = db.execute(
             "SELECT * FROM custom_problems ORDER BY created_at DESC"
@@ -105,7 +161,9 @@ def admin_dashboard():
         "active_users": active_users,
         "signup_labels": signup_labels, "signup_data": signup_data,
         "prob_labels": prob_labels, "prob_data": prob_data,
-        "custom_probs": rows_to_dicts(custom_probs)
+        "custom_probs": rows_to_dicts(custom_probs),
+        "years": configured_years,
+        "selected_year": year,   # "" = All batches
     })
 
 

@@ -64,6 +64,7 @@ DATA_START_ROW = HEADER_ROW + 1                                    # first row o
 
 STATUS_SOLVED = "Solved"
 STATUS_NOT_SOLVED = "Not Solved"
+LINK_COL_HEADER = "Submission Link"   # companion column written immediately right of every problem's status column
 
 _lock = threading.Lock()   # gspread client isn't guaranteed thread-safe; serialize writes
 
@@ -304,6 +305,37 @@ def _find_or_create_problem_column(ws, problem_name, problem_url, due_date=None)
     return new_col
 
 
+def _find_or_create_link_column(ws, status_col):
+    """Companion 'Submission Link' column, always immediately to the
+    right of the problem's Solved/Not Solved status column found/created
+    by _find_or_create_problem_column(). Created once per problem column
+    (inserting a fresh column so nothing already written elsewhere in the
+    row shifts unexpectedly); reused every time after that. Holds the
+    problem's link for any student marked Solved, so mentors can click
+    straight through from the roster instead of hunting for it."""
+    headers = _header_row_values(ws)
+    next_idx = status_col + 1
+    existing = headers[next_idx - 1].strip() if next_idx - 1 < len(headers) else ""
+    if existing.lower() == LINK_COL_HEADER.lower():
+        return next_idx
+
+    ws.spreadsheet.batch_update({
+        "requests": [{
+            "insertDimension": {
+                "range": {
+                    "sheetId": ws.id,
+                    "dimension": "COLUMNS",
+                    "startIndex": next_idx - 1,
+                    "endIndex": next_idx,
+                },
+                "inheritFromBefore": False,
+            }
+        }]
+    })
+    ws.update_cell(HEADER_ROW, next_idx, LINK_COL_HEADER)
+    return next_idx
+
+
 def _apply_conditional_colors(ws, col_idx):
     """Green for 'Solved', red for 'Not Solved' — matches the screenshot."""
     sheet_id = ws.id
@@ -400,17 +432,27 @@ def sync_assignment_to_sheet(problem_name, problem_url, due_date, students, get_
                 return False
 
             col = _find_or_create_problem_column(ws, problem_name, problem_url, due_date)
+            link_col = _find_or_create_link_column(ws, col)
 
             updates = []
             for s in students:
                 row = row_index.get(s.get("reg_no")) or row_index.get((s.get("full_name") or "").lower())
                 if not row:
                     continue  # student not on the roster yet — resync_all() will add them
-                value = STATUS_SOLVED if s.get("completed") else STATUS_NOT_SOLVED
+                completed = bool(s.get("completed"))
+                value = STATUS_SOLVED if completed else STATUS_NOT_SOLVED
                 updates.append({"range": f"{_col_letter(col)}{row}", "values": [[value]]})
 
+                # Submission Link column: only populated once the student is
+                # marked Solved — points at the problem's own link (the same
+                # URL the header hyperlinks to), so it's always something
+                # real rather than a fabricated per-submission URL.
+                link_url = (s.get("submission_link") or problem_url or "").strip()
+                link_value = f'=HYPERLINK("{link_url}","View")' if (completed and link_url) else ""
+                updates.append({"range": f"{_col_letter(link_col)}{row}", "values": [[link_value]]})
+
             if updates:
-                ws.batch_update(updates)
+                ws.batch_update(updates, value_input_option="USER_ENTERED")
             return True
         except Exception as e:
             print(f"[mentor_sheet_sync] sync_assignment_to_sheet failed: {e}")
@@ -469,6 +511,7 @@ def resync_all(get_db, year):
 
                 for p in problems:
                     col = _find_or_create_problem_column(ws, p["problem_name"], p["problem_url"], p["due_date"])
+                    link_col = _find_or_create_link_column(ws, col)
                     summary["columns_touched"] += 1
 
                     rows = db.execute("""
@@ -486,10 +529,14 @@ def resync_all(get_db, year):
                         row = row_index.get(r["reg_no"]) or row_index.get((r["full_name"] or "").lower())
                         if not row:
                             continue
-                        value = STATUS_SOLVED if r["completed"] else STATUS_NOT_SOLVED
+                        completed = bool(r["completed"])
+                        value = STATUS_SOLVED if completed else STATUS_NOT_SOLVED
                         updates.append({"range": f"{_col_letter(col)}{row}", "values": [[value]]})
+                        link_url = (p["problem_url"] or "").strip()
+                        link_value = f'=HYPERLINK("{link_url}","View")' if (completed and link_url) else ""
+                        updates.append({"range": f"{_col_letter(link_col)}{row}", "values": [[link_value]]})
                     if updates:
-                        ws.batch_update(updates)
+                        ws.batch_update(updates, value_input_option="USER_ENTERED")
                         summary["cells_updated"] += len(updates)
 
             return summary

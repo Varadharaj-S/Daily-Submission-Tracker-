@@ -304,6 +304,11 @@ function renderLogsTable() {
 function renderAdmin(d) {
   ME_ID = d.__me_id;
   ADMIN_DATA = d;
+  // Backend is authoritative on which year actually applied (an
+  // unrecognised ?year= in the URL falls back to "" / all-batches
+  // server-side too) — keep the button row and page-sub in sync with it.
+  ADMIN_YEAR = d.selected_year || "";
+  if (Array.isArray(d.years) && d.years.length) ADMIN_CONFIGURED_YEARS = d.years;
   usersPage = 1; logsPage = 1; usersSearch = "";
   const chartOpts = () => ({
     responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
@@ -319,14 +324,16 @@ function renderAdmin(d) {
       <div>
         <h2>👑 Admin Panel</h2>
         <p class="page-sub" style="margin:0;font-size:.8rem;color:var(--muted)">
-          ${d.users.length} users · <span style="color:#34d399">${d.active_users} active</span> · ${d.total_subs} submissions
+          ${d.users.length} users${ADMIN_YEAR ? ` in <strong>${ADMIN_YEAR}</strong>` : " · all batches"} ·
+          <span style="color:#34d399">${d.active_users} active</span> · ${d.total_subs} submissions
           ${d.pending ? `<span class="pending-badge">${d.pending} pending</span>` : ""}
         </p>
       </div>
       <div class="admin-topbar-actions">
         ${ADMIN_CONFIGURED_YEARS.length ? `
-        <span class="form-label" style="margin:0;align-self:center">Year:</span>
-        ${ADMIN_CONFIGURED_YEARS.map(y => `<button type="button" class="btn-sm ${y === ADMIN_YEAR ? "btn-primary" : "btn-outline"}" onclick="switchAdminYear('${y}')">${y}</button>`).join("")}
+        <span class="form-label" style="margin:0;align-self:center">Batch:</span>
+        <button type="button" class="btn-sm ${!ADMIN_YEAR ? "btn-primary" : "btn-outline"}" onclick="switchAdminYear('')" title="Show every batch's students and logs together">All</button>
+        ${ADMIN_CONFIGURED_YEARS.map(y => `<button type="button" class="btn-sm ${y === ADMIN_YEAR ? "btn-primary" : "btn-outline"}" onclick="switchAdminYear('${y}')" title="Show only ${y}'s students and logs">${y}</button>`).join("")}
         ` : ""}
         <button class="btn btn-outline" onclick="openMasterSheet(ADMIN_YEAR)" title="Open the master roster sheet in a new tab" ${ADMIN_YEAR ? "" : "disabled"}>📄 My Sheet</button>
         <a href="daily_tracker.html" class="btn btn-outline">🗂 Daily Tracker</a>
@@ -372,7 +379,7 @@ function renderAdmin(d) {
 
     <div class="table-card">
       <div class="table-card-header">
-        <h3>👤 All Users</h3>
+        <h3>👤 ${ADMIN_YEAR ? `${ADMIN_YEAR} Students` : "All Users"}</h3>
         <div class="search-bar" style="margin:0;width:220px">
           <span class="search-icon">🔍</span>
           <input id="userSearch" type="text" placeholder="Search username / handle…" oninput="filterUsers()">
@@ -388,7 +395,7 @@ function renderAdmin(d) {
     </div>
 
     <div class="table-card">
-      <div class="table-card-header"><h3>📋 Action Log <span class="muted small">(last 30)</span></h3></div>
+      <div class="table-card-header"><h3>📋 Action Log ${ADMIN_YEAR ? `— ${ADMIN_YEAR}` : ""} <span class="muted small">(last 30)</span></h3></div>
       <div class="table-wrap"><table>
         <thead><tr><th>Time</th><th>Action</th><th>Target</th><th>Details</th><th>IP</th></tr></thead>
         <tbody id="logsTableBody"></tbody>
@@ -438,16 +445,13 @@ function renderAdmin(d) {
   const me = await requireAuth({ admin: true });
   if (!me) return;
 
-  // Load configured years for the "My Sheet" year selector (reuses the
-  // same /admin/year_sheets endpoint mentor.html's year manager uses —
-  // single source of truth for which years exist, no duplicate logic).
-  const yearData = await apiGet("/admin/year_sheets");
-  ADMIN_CONFIGURED_YEARS = ((yearData && yearData.year_sheets) || []).map(y => y.year);
-  if (!ADMIN_YEAR || !ADMIN_CONFIGURED_YEARS.includes(ADMIN_YEAR)) {
-    ADMIN_YEAR = ADMIN_CONFIGURED_YEARS[0] || "";
-  }
-
-  const d = await apiGet("/admin");
+  // /admin itself now returns the configured years + which one (if any)
+  // actually applied server-side (an unrecognised ?year= is ignored
+  // there too) — that's the single source of truth renderAdmin() syncs
+  // ADMIN_YEAR/ADMIN_CONFIGURED_YEARS back from. Batch filter (students,
+  // logs, stats) is opt-in: "All" (no ?year=) shows every batch, same as
+  // before this existed.
+  const d = await apiGet(ADMIN_YEAR ? `/admin?year=${encodeURIComponent(ADMIN_YEAR)}` : "/admin");
   d.__me_id = me.id;
   renderAdmin(d);
 })();
