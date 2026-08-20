@@ -45,10 +45,17 @@ def get_sheet(username, year):
     return sheet
 
 def regroup_sheet(sheet):
+    """Returns a small status dict instead of None — merge failures used to
+    only ever reach a server console nobody watching a background sync
+    thread would ever see, so from the student/mentor's side it just looked
+    like "merging doesn't work", with no way to tell a real API failure
+    apart from the code silently doing nothing. Callers now surface this
+    in the sync result message so a failure is visible instead of silent."""
+    status = {"attempted": 0, "merged": 0, "failed": 0, "unmerge_ok": True}
     values = sheet.get_all_values()
 
     if len(values) <= 1:
-        return
+        return status
 
     values = values[1:]   # Skip header
 
@@ -124,7 +131,17 @@ def regroup_sheet(sheet):
                 return False
         return False
 
-    _send_batch_update([{"unmergeCells": {"range": {"sheetId": sheet.id}}}])
+    unmerge_ok = _send_batch_update([{"unmergeCells": {"range": {"sheetId": sheet.id}}}])
+    status["unmerge_ok"] = unmerge_ok
+    if not unmerge_ok:
+        # Re-merging on top of whatever's already merged from a previous
+        # run risks the Sheets API rejecting the new mergeCells requests
+        # outright (an overlapping-merge error), which would silently fail
+        # EVERY block this run rather than just the one unmerge — worse
+        # than doing nothing. Bail out here and let the next sync retry
+        # the whole thing cleanly instead.
+        print("⚠️ regroup_sheet: unmergeCells failed, skipping this run's merge to avoid overlap errors")
+        return status
 
     requests = []
 
@@ -133,6 +150,7 @@ def regroup_sheet(sheet):
         if len(rows) == 1:
             continue
 
+        status["attempted"] += 1
         requests.append({
             "mergeCells": {
                 "range": {
@@ -169,12 +187,18 @@ def regroup_sheet(sheet):
         fail_count = 0
         for i in range(0, len(requests), MERGE_CHUNK_SIZE):
             chunk = requests[i:i + MERGE_CHUNK_SIZE]
+            # Each chunk holds 2 requests per date-block (DATE + COUNT
+            # columns), so halve back to a block count for the status.
             if _send_batch_update(chunk):
-                ok_count += len(chunk)
+                ok_count += len(chunk) // 2
             else:
-                fail_count += len(chunk)
+                fail_count += len(chunk) // 2
+        status["merged"] = ok_count
+        status["failed"] = fail_count
         if fail_count:
             print(f"⚠️ regroup_sheet: {fail_count} merge request(s) failed after retries, {ok_count} succeeded")
+
+    return status
 
 def backfill_missing_rows_from_db(user_id, username, get_db, year):
     """
@@ -272,7 +296,10 @@ def backfill_missing_rows_from_db(user_id, username, get_db, year):
             count_column,
             value_input_option="USER_ENTERED"
         )
-        regroup_sheet(sheet)
+        merge_status = regroup_sheet(sheet)
+        if merge_status.get("failed") or not merge_status.get("unmerge_ok", True):
+            print(f"⚠️ Backfill for '{username}': date-cell merge did not fully complete "
+                  f"({merge_status.get('merged', 0)} ok, {merge_status.get('failed', 0)} failed)")
     except Exception as e:
         print(f"⚠️ Count/regroup step failed for '{username}' after backfill (rows still saved): {e}")
 
@@ -351,6 +378,21 @@ def rebuild_user_sheet_from_db(user_id, username, get_db, year):
         snapshot = None
 
     try:
+        # Defensive: unmerge BEFORE clearing, not just inside regroup_sheet()
+        # afterwards. If a previous run left the sheet in a merged state and
+        # this rebuild's plain-value writes below land on top of those old
+        # merged ranges, the Sheets API only accepts a write to the top-left
+        # cell of each merge and silently drops the rest — which would make
+        # freshly rebuilt rows look blank/wrong even though this function
+        # sent the right data. Clearing that structure first removes that
+        # whole failure mode regardless of whether it's ever actually fired.
+        try:
+            sheet.spreadsheet.batch_update(
+                {"requests": [{"unmergeCells": {"range": {"sheetId": sheet.id}}}]}
+            )
+        except Exception as e:
+            print(f"⚠️ Pre-rebuild unmerge failed for '{username}' (continuing anyway): {e}")
+
         sheet.batch_clear(["A:G"])
 
         sheet.update(
@@ -367,6 +409,7 @@ def rebuild_user_sheet_from_db(user_id, username, get_db, year):
             }
         )
 
+        merge_status = {"attempted": 0, "merged": 0, "failed": 0, "unmerge_ok": True}
         if rows:
             from collections import Counter
 
@@ -386,7 +429,10 @@ def rebuild_user_sheet_from_db(user_id, username, get_db, year):
                 next_row += len(chunk)
 
             # regroup: merge DATE and COUNT cells for consecutive same-date rows
-            regroup_sheet(sheet)
+            merge_status = regroup_sheet(sheet)
+            if merge_status.get("failed") or not merge_status.get("unmerge_ok", True):
+                print(f"⚠️ Rebuild for '{username}': date-cell merge did not fully complete "
+                      f"({merge_status.get('merged', 0)} ok, {merge_status.get('failed', 0)} failed)")
 
     except Exception as e:
         print(f"❌ Rebuild failed mid-write for '{username}': {e}")
@@ -458,6 +504,10 @@ def append_new_rows_to_sheet(username, new_rows, year):
     an explicit "Restore sheet" to pick up.
     `year` is the student's cohort year (PHASE 2) — resolves which
     year-specific spreadsheet this student's tab lives in.
+    Returns (rows_written, merge_status) — merge_status surfaces up to
+    sync_user_data's response message so a failed merge is actually visible
+    to whoever's looking at the sync result, instead of only ever reaching
+    a server console nobody watching a background thread would see.
     """
     sheet = get_sheet(username, year)
 
@@ -517,13 +567,14 @@ def append_new_rows_to_sheet(username, new_rows, year):
                 value_input_option="USER_ENTERED"
             )
 
-        regroup_sheet(sheet)
+        merge_status = regroup_sheet(sheet)
     except Exception as e:
         # Rows are already written and safe — only the COUNT/merge
         # formatting failed, so just log it instead of failing the sync.
         print(f"⚠️ Count/regroup step failed for '{username}' (rows still saved): {e}")
+        merge_status = {"attempted": 0, "merged": 0, "failed": 0, "unmerge_ok": False, "error": str(e)}
 
-    return len(new_rows)
+    return len(new_rows), merge_status
 
 
 # ================= HELPERS =================
@@ -672,7 +723,7 @@ def fetch_cf(cf_handle):
 
         rows.append([
             date,
-            f'=HYPERLINK("{url}", "{title}")',
+            f'=HYPERLINK("{link}", "{title}")',
             sub_link,
             diff,
             "Codeforces",
@@ -1169,8 +1220,14 @@ def sync_user_data(user, get_db):
             sheet_msg = "⚠️ Data saved to database, but you're not assigned to a year/cohort yet — ask your mentor to set one so your sheet can sync."
         else:
             try:
-                append_new_rows_to_sheet(username, new_rows, year)
+                _, merge_status = append_new_rows_to_sheet(username, new_rows, year)
                 print(f"📄 Added {len(new_rows)} rows to tab '{username}' ({year} sheet)")
+                if merge_status.get("failed") or not merge_status.get("unmerge_ok", True):
+                    # Rows themselves are safe either way — only the visual
+                    # "merge same-date rows together" step didn't complete.
+                    # Surface it so it's not a silent, invisible failure —
+                    # it'll self-heal on the next successful sync.
+                    sheet_msg = "📄 Rows saved, but date-cell merging didn't complete this time (will retry on next sync)."
             except Exception as e:
                 sheet_ok = False
                 sheet_msg = f"⚠️ Data saved to database, but sheet update failed: {e}"
