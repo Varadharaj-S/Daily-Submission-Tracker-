@@ -212,6 +212,8 @@ def backfill_missing_rows_from_db(user_id, username, get_db, year):
     `year` is the student's cohort year (PHASE 2) — resolves which
     year-specific spreadsheet this student's tab lives in.
     """
+    dedupe_blank_link_submissions(user_id, get_db)
+
     sheet = get_sheet(username, year)
     existing = sheet.get_all_values()
     existing_urls = set(
@@ -307,6 +309,74 @@ def backfill_missing_rows_from_db(user_id, username, get_db, year):
     return len(rows)
 
 
+def dedupe_blank_link_submissions(user_id, get_db):
+    """
+    Cleans up "ghost" duplicate rows that show up as the same problem
+    appearing twice on the sheet — once correctly with its LINK cell
+    filled in, once with LINK blank. Root cause: an old code path once
+    saved submissions.problem_url as '' for a while (before it was
+    reliably captured for every platform); because problem_id also came
+    out blank for those rows, they never matched the table's real
+    uniqueness key (user_id, platform, problem_id, solved_on) against the
+    later, correctly-saved row for the exact same solve — so both sit in
+    the DB side by side forever, and every rebuild faithfully reproduces
+    both.
+
+    Done in Python rather than SQL, and matched on the *parsed* date
+    rather than solved_date's raw text: the ghost rows are old enough
+    that they're stored in DD-MM-YYYY text while their correct twin was
+    saved later in YYYY-MM-DD text (or vice versa) — a plain
+    `good.solved_date = bad.solved_date` SQL comparison would never
+    match those as equal and silently delete nothing.
+
+    Only ever deletes the blank-link twin, and only when a properly
+    linked twin for the same user+platform+problem_name+date genuinely
+    exists — a submission that's the ONLY record of that solve is never
+    touched, even if its link happens to be blank.
+    Returns the number of ghost rows removed.
+    """
+    from utils.helpers import _parse_any_date
+
+    with get_db() as db:
+        subs = db.execute("""
+            SELECT id, platform, problem_name, solved_date, problem_url
+            FROM submissions WHERE user_id = ?
+        """, (user_id,)).fetchall()
+
+    def group_key(s):
+        dt = _parse_any_date(s["solved_date"])
+        return (
+            (s["platform"] or "").strip().lower(),
+            (s["problem_name"] or "").strip().lower(),
+            dt.date() if dt else s["solved_date"],
+        )
+
+    groups = {}
+    for s in subs:
+        groups.setdefault(group_key(s), []).append(s)
+
+    to_delete = []
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        has_good = any((m["problem_url"] or "").strip() for m in members)
+        if not has_good:
+            continue  # every copy is blank — nothing to prefer, don't touch any of them
+        to_delete.extend(m["id"] for m in members if not (m["problem_url"] or "").strip())
+
+    if not to_delete:
+        return 0
+
+    with get_db() as db:
+        cur = db.execute(
+            "DELETE FROM submissions WHERE id = ANY(%s)", (to_delete,)
+        )
+        removed = cur.rowcount
+
+    print(f"🧹 Removed {removed} blank-link ghost submission(s) for user_id={user_id}")
+    return removed
+
+
 def rebuild_user_sheet_from_db(user_id, username, get_db, year):
     """
     Wipe this user's Google Sheet tab and rewrite it completely from
@@ -314,7 +384,12 @@ def rebuild_user_sheet_from_db(user_id, username, get_db, year):
     "someone deleted rows in the Sheet, get them back" button.
     `year` is the student's cohort year (PHASE 2) — resolves which
     year-specific spreadsheet this student's tab lives in.
+    Runs dedupe_blank_link_submissions() first so a rebuild also
+    self-heals the "same problem twice, one with a blank link" ghost-row
+    issue instead of just faithfully reproducing it again.
     """
+    dedupe_blank_link_submissions(user_id, get_db)
+
     with get_db() as db:
         subs = db.execute("""
                         SELECT

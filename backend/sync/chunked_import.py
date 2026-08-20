@@ -648,20 +648,42 @@ def rebuild_user_sheet(user_id, username, user_email, cohort_year):
     from the DB instead of from a single run's fetch. Returns
     sheet_rows_written. Raises on failure (caller decides how to report
     it — a Sheet failure never rolls back the DB write that already
-    succeeded)."""
+    succeeded).
+
+    Runs normal_sync.dedupe_blank_link_submissions() first — this
+    function is called after EVERY /import_codeforces, /import_atcoder,
+    and /import_leetcode request, so without that it would keep faithfully
+    reproducing any old blank-link "ghost" duplicate rows on every single
+    import, forever.
+
+    Sorts on the actually-parsed date (utils.helpers._parse_any_date)
+    instead of a raw `ORDER BY solved_date` text sort — solved_date isn't
+    stored in one uniform format across all rows (older rows: DD-MM-YYYY
+    text, newer: YYYY-MM-DD), so a text sort clumps whichever format is a
+    minority together in the wrong place instead of interleaving
+    everything in real chronological order.
+    """
+    from normal_sync import dedupe_blank_link_submissions
+    from utils.helpers import _parse_any_date
+
+    dedupe_blank_link_submissions(user_id, get_db)
+
     with get_db() as db:
         rows = db.execute(
             """SELECT solved_date, problem_name, problem_url, submission_url, difficulty, platform, tags
-               FROM submissions WHERE user_id=%s ORDER BY solved_date""",
+               FROM submissions WHERE user_id=%s""",
             (user_id,),
         ).fetchall()
 
-    sheet_rows = []
+    parsed = []
     for r in rows:
-        try:
-            date_ddmmyyyy = datetime.strptime(r["solved_date"], "%Y-%m-%d").strftime("%d-%m-%Y")
-        except Exception:
-            date_ddmmyyyy = r["solved_date"] or ""
+        dt = _parse_any_date(r["solved_date"])
+        parsed.append((dt or datetime.min, r))
+    parsed.sort(key=lambda t: t[0])
+
+    sheet_rows = []
+    for dt, r in parsed:
+        date_ddmmyyyy = dt.strftime("%d-%m-%Y") if dt != datetime.min else (r["solved_date"] or "")
         title_cell = f'=HYPERLINK("{r["problem_url"]}", "{r["problem_name"]}")' if r["problem_url"] else (r["problem_name"] or "")
         sheet_rows.append([
             date_ddmmyyyy, title_cell, r["submission_url"] or "", r["difficulty"] or "",
