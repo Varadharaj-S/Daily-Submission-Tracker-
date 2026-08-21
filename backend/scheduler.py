@@ -94,7 +94,17 @@ SYNC_CONCURRENCY = int(os.environ.get("SYNC_CONCURRENCY", "10"))
 # routes/cron.py's cron_daily_sync(). frontend/worker.js's Cloudflare Cron
 # Trigger calls this in a loop (Cloudflare Workers aren't bound by Vercel's
 # per-invocation limit) until every active user is synced for the day.
-DAILY_SYNC_BATCH_SIZE = int(os.environ.get("DAILY_SYNC_BATCH_SIZE", "15"))
+# BUGFIX: was 15. sync_batch() has no internal deadline of its own — the
+# 8s CRON_TIME_BUDGET_SECONDS check in routes/cron.py only runs BETWEEN
+# whole sync_batch() calls, not during one — so this number is really
+# "how many users' worth of cold-API risk am I exposed to in a single
+# Vercel invocation with no way to bail out partway". Smaller batches
+# mean a single unlucky slow user can't hold up as much of the queue
+# before the outer loop's next elapsed-time check gets a chance to stop
+# looping. Combined with the now-much-shorter per-request timeouts (see
+# normal_sync.py), this keeps worst-case exposure well under Hobby's
+# ~10s cap in the common case.
+DAILY_SYNC_BATCH_SIZE = int(os.environ.get("DAILY_SYNC_BATCH_SIZE", "8"))
 
 
 def sync_batch(after_id: int = 0, batch_size: int = None, concurrency: int = None) -> dict:

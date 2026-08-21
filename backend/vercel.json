@@ -16,6 +16,10 @@
     {
       "path": "/api/cron/contest-sync",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/daily-sync",
+      "schedule": "0 4 * * *"
     }
   ]
 }

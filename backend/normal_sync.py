@@ -2,6 +2,7 @@ from collections import Counter
 import os
 import json
 import time
+import threading
 from datetime import datetime
 
 import requests
@@ -735,7 +736,7 @@ def get_lc_details(slug):
                 "Referer": "https://leetcode.com",
                 "User-Agent": "Mozilla/5.0",
             },
-            timeout=60,
+            timeout=8,  # BUGFIX: was 60s — called once PER PROBLEM, can run many times per user inside a sync batch; a single slow call at 60s can blow Vercel's whole invocation cap on its own
         )
         data = res.json()
         question = data.get("data", {}).get("question") or {}
@@ -757,7 +758,7 @@ def fetch_cf(cf_handle):
     seen = set()
 
     url = f"https://codeforces.com/api/user.status?handle={cf_handle}&count=10000"
-    data, err = safe_get_json(url, timeout=20)
+    data, err = safe_get_json(url, timeout=10)  # BUGFIX: was 20s, tightened for the Vercel cron batch path
     if not data or data.get("status") != "OK":
         print(f"[CF ERROR] {err or 'bad response'}")
         return []
@@ -835,17 +836,48 @@ def _normalize_lc_items(payload):
 # ================= LEETCODE (LATEST 20 - NO COOKIE) =================
 
 _ALFA_BASE = "https://alfa-leetcode-api.onrender.com"
+_alfa_last_ping = {"t": 0.0}
+_ALFA_PING_COOLDOWN = 120  # seconds — don't re-ping every single batch
+
 
 def alfa_wakeup():
     """
-    One-shot wake-up ping for alfa-leetcode-api (free Render dyno).
-    Call ONCE per sync batch — NOT once per user or per endpoint.
+    Best-effort wake-up ping for alfa-leetcode-api (free Render dyno,
+    sleeps after ~15 min idle). Non-blocking and short-timeout on purpose:
+
+    BUGFIX: this used to be a synchronous `requests.get(..., timeout=20)`
+    called inline at the start of every sync_batch() — on Vercel (Hobby
+    cap ~10s per invocation), a genuinely cold dyno (which it always is
+    right after 15 min of no cron activity — i.e. almost every single
+    cron tick) meant this ONE call alone could exceed the entire
+    invocation's time budget before a single user got synced. From the
+    Cloudflare Worker's side that showed up as the very first batch
+    request timing out/failing, the loop logging an error and bailing
+    out — net effect: auto-sync looked completely broken on Vercel, every
+    tick, forever, even though the actual sync code was fine.
+
+    Fires the ping in a background thread and returns immediately instead
+    of blocking sync_batch() on it — this is a pure optimization (each
+    LC fetch already retries with its own backoff via
+    _fetch_alfa_with_retry, so NOT waiting for this doesn't break
+    correctness, it just means the first real fetch pays the cold-start
+    cost instead of this ping doing it up front). Also only actually
+    fires once per _ALFA_PING_COOLDOWN, so a Cloudflare Worker looping
+    many batches in one cron tick doesn't refire it every batch.
     """
-    try:
-        ping = requests.get(_ALFA_BASE, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
-        print(f"[LC] alfa wake-up ping: {ping.status_code}")
-    except Exception as e:
-        print(f"[LC] alfa wake-up ping failed: {e}")
+    now = time.monotonic()
+    if now - _alfa_last_ping["t"] < _ALFA_PING_COOLDOWN:
+        return
+    _alfa_last_ping["t"] = now
+
+    def _ping():
+        try:
+            ping = requests.get(_ALFA_BASE, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+            print(f"[LC] alfa wake-up ping: {ping.status_code}")
+        except Exception as e:
+            print(f"[LC] alfa wake-up ping failed (non-fatal, retries happen per-fetch anyway): {e}")
+
+    threading.Thread(target=_ping, daemon=True).start()
 
 
 def _fetch_alfa_with_retry(endpoint, max_retries=3):
@@ -853,12 +885,23 @@ def _fetch_alfa_with_retry(endpoint, max_retries=3):
     GET from alfa-leetcode-api with 429 backoff retry.
     alfa_wakeup() should already have been called once before this batch.
     Returns (data_dict_or_list, err_str_or_None).
+
+    BUGFIX: timeout was 30s with a 5s→10s→20s backoff — fine for
+    scheduler.py's unbounded Render process, but this same function also
+    runs inside routes/cron.py's Vercel-invocation loop, where a SINGLE
+    call anywhere near that long can blow straight through the whole
+    invocation's hard wall-clock cap (~10s Hobby) and get the entire
+    function killed mid-flight by the platform — no clean response, the
+    Cloudflare Worker's loop just sees a failed fetch and gives up for
+    that tick. Shortened so one slow/cold-start call fails fast on its
+    own instead of taking the whole batch down with it; a failed fetch
+    here still gets picked up on the next batch/cron tick either way.
     """
     headers = {"User-Agent": "Mozilla/5.0"}
-    delay = 5  # seconds between retries
+    delay = 2  # seconds between retries
     for attempt in range(1, max_retries + 1):
         try:
-            res = requests.get(endpoint, headers=headers, timeout=30)
+            res = requests.get(endpoint, headers=headers, timeout=8)
             if res.status_code == 200:
                 ctype = res.headers.get("Content-Type", "")
                 if "json" not in ctype.lower():
@@ -904,7 +947,7 @@ def _fetch_lc_via_graphql(lc_handle, seen, limit=20):
             LC_GQL,
             json={"query": query, "variables": {"username": lc_handle, "limit": limit}},
             headers=headers,
-            timeout=30,
+            timeout=8,  # BUGFIX: was 30s — tightened for the Vercel cron batch path
         )
         if res.status_code != 200:
             print(f"[LC-GQL] failed: status={res.status_code}")
@@ -1074,13 +1117,13 @@ def fetch_ac(ac_handle):
 
     data, err = safe_get_json(
         f"https://kenkoooo.com/atcoder/atcoder-api/v3/user/submissions?user={ac_handle}&from_second=0",
-        timeout=20,
+        timeout=10,  # BUGFIX: was 20s, tightened for the Vercel cron batch path
     )
     if not data or not isinstance(data, list):
         print(f"[AC ERROR] {err or 'bad response'}")
         return []
 
-    problem_data, _ = safe_get_json("https://kenkoooo.com/atcoder/resources/problems.json", timeout=20)
+    problem_data, _ = safe_get_json("https://kenkoooo.com/atcoder/resources/problems.json", timeout=10)
     problem_map = {}
     if isinstance(problem_data, list):
         for p in problem_data:
